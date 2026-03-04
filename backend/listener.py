@@ -7,6 +7,7 @@ It runs all scripts in sequence on a loop:
 1. Ingest new applications
 2. Grade candidates
 3. Send outreach emails
+(Recording is now handled by LiveKit Egress — no video_fixer step needed)
 
 Then sleeps and repeats.
 """
@@ -23,8 +24,6 @@ from utils import get_supabase_client, get_gmail_service, log
 # Import the other modules' run functions
 from grader import run_grader
 from mailer import run_mailer
-from video_fixer import run_video_fixer
-
 # For ingest, we need to handle the import differently since it's in a different folder
 try:
     from ingest import run_ingest
@@ -71,13 +70,6 @@ def run_pipeline_cycle():
         log("INFO", f"Step 3 (Mailer): {dubai} eligibility forms, {invites} invites, {round_2} round 2 invites, {reminders} reminders sent")
     except Exception as e:
         log("ERROR", f"Step 3 (Mailer) failed: {e}")
-
-    # Step 4: Remux interview recordings for seekable downloads
-    try:
-        fixed = run_video_fixer()
-        log("INFO", f"Step 4 (VideoFixer): {fixed} recording(s) remuxed")
-    except Exception as e:
-        log("ERROR", f"Step 4 (VideoFixer) failed: {e}")
 
     log("INFO", "Pipeline cycle complete!")
 
