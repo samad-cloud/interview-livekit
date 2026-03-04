@@ -20,3 +20,7 @@ httpx
 
 # Document parsing
 python-docx
+
+# LiveKit Agent
+livekit-agents[deepgram,google,silero,turn]>=0.12.0
+livekit-api>=0.7.0

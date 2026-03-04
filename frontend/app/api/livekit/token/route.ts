@@ -1,0 +1,125 @@
+import { NextRequest, NextResponse } from 'next/server';
+import {
+  AccessToken,
+  EgressClient,
+  EncodedFileOutput,
+  RoomServiceClient,
+  S3Upload,
+} from 'livekit-server-sdk';
+
+export async function POST(req: NextRequest) {
+  const {
+    candidateId,
+    round,
+    candidateName,
+    jobTitle,
+    jobDescription,
+    resumeText,
+    dossier,
+    systemPrompt,
+  } = await req.json();
+
+  if (!candidateId || !round) {
+    return NextResponse.json({ error: 'Missing candidateId or round' }, { status: 400 });
+  }
+
+  const apiKey = process.env.LIVEKIT_API_KEY!;
+  const apiSecret = process.env.LIVEKIT_API_SECRET!;
+  const livekitUrl = process.env.LIVEKIT_URL!;
+
+  if (!apiKey || !apiSecret || !livekitUrl) {
+    return NextResponse.json({ error: 'LiveKit not configured' }, { status: 500 });
+  }
+
+  const roomName = `interview-${candidateId}-r${round}`;
+
+  // Metadata embedded in room — agent reads this to configure itself
+  const roomMetadata = JSON.stringify({
+    candidateId,
+    round,
+    candidateName,
+    jobTitle,
+    jobDescription,
+    resumeText,
+    dossier: dossier || null,
+    systemPrompt: systemPrompt || null,
+  });
+
+  // Create the room with metadata
+  const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
+  try {
+    await roomService.createRoom({
+      name: roomName,
+      emptyTimeout: 300,
+      maxParticipants: 3,
+      metadata: roomMetadata,
+    });
+  } catch {
+    // Room may already exist — that's fine
+  }
+
+  // Issue candidate participant token
+  const at = new AccessToken(apiKey, apiSecret, {
+    identity: `candidate-${candidateId}`,
+    name: candidateName,
+    ttl: 7200,
+  });
+  at.addGrant({
+    roomJoin: true,
+    room: roomName,
+    canPublish: true,
+    canSubscribe: true,
+    canPublishData: true,
+  });
+
+  const token = await at.toJwt();
+
+  // Start Egress recording (audio-only for now — voice migration phase)
+  let egressId: string | null = null;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const supabaseS3Key = process.env.SUPABASE_S3_ACCESS_KEY_ID;
+  const supabaseS3Secret = process.env.SUPABASE_S3_SECRET_ACCESS_KEY;
+  const supabaseProjectRef = supabaseUrl?.match(/https:\/\/([^.]+)/)?.[1];
+
+  if (supabaseS3Key && supabaseS3Secret && supabaseProjectRef) {
+    try {
+      const egressClient = new EgressClient(livekitUrl, apiKey, apiSecret);
+      const folder = round === 2 ? 'round2' : 'round1';
+      const filename = `${folder}/${candidateId}-${Date.now()}-livekit`;
+
+      const fileOutput = new EncodedFileOutput({
+        filepath: `${filename}.mp4`,
+        output: {
+          case: 's3',
+          value: new S3Upload({
+            accessKey: supabaseS3Key,
+            secret: supabaseS3Secret,
+            bucket: 'interview-recordings',
+            endpoint: `https://${supabaseProjectRef}.supabase.co/storage/v1/s3`,
+            region: 'us-east-1',
+          }),
+        },
+      });
+
+      const egress = await egressClient.startRoomCompositeEgress(
+        roomName,
+        fileOutput,
+        { audioOnly: true, layout: 'speaker' },
+      );
+
+      egressId = egress.egressId;
+      console.log(`[LiveKit] Egress started: ${egressId} for candidate ${candidateId} R${round}`);
+    } catch (err) {
+      console.error('[LiveKit] Egress start failed:', err);
+    }
+  } else {
+    console.warn('[LiveKit] Supabase S3 credentials not set — recording disabled');
+  }
+
+  return NextResponse.json({
+    token,
+    serverUrl: process.env.NEXT_PUBLIC_LIVEKIT_URL,
+    roomName,
+    egressId,
+  });
+}
