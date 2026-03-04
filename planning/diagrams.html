@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Recruiter Brain - System Architecture Diagrams</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #0a0a0f;
+      color: #e0e0e0;
+      padding: 40px;
+    }
+    h1 {
+      text-align: center;
+      font-size: 2.5rem;
+      margin-bottom: 10px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle {
+      text-align: center;
+      color: #888;
+      margin-bottom: 50px;
+      font-size: 1.1rem;
+    }
+    .diagram-section {
+      background: #12121a;
+      border: 1px solid #2a2a3a;
+      border-radius: 16px;
+      padding: 30px;
+      margin-bottom: 40px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+    .diagram-section h2 {
+      font-size: 1.5rem;
+      margin-bottom: 8px;
+      color: #a78bfa;
+    }
+    .diagram-section p {
+      color: #888;
+      margin-bottom: 20px;
+      font-size: 0.95rem;
+    }
+    .mermaid {
+      display: flex;
+      justify-content: center;
+      padding: 20px;
+      background: #1a1a2e;
+      border-radius: 12px;
+      overflow-x: auto;
+    }
+    .mermaid svg {
+      max-width: 100%;
+    }
+    .toc {
+      background: #12121a;
+      border: 1px solid #2a2a3a;
+      border-radius: 16px;
+      padding: 25px 30px;
+      margin-bottom: 40px;
+    }
+    .toc h3 { color: #a78bfa; margin-bottom: 12px; }
+    .toc a {
+      color: #667eea;
+      text-decoration: none;
+      display: block;
+      padding: 6px 0;
+      font-size: 0.95rem;
+    }
+    .toc a:hover { color: #a78bfa; }
+  </style>
+</head>
+<body>
+
+<h1>The "Recruiter Brain" System Architecture</h1>
+<p class="subtitle">Agentic AI Recruiting Platform - Visual System Design</p>
+
+<div class="toc">
+  <h3>Diagrams</h3>
+  <a href="#d1">1. High-Level System Architecture (Phases & Agents)</a>
+  <a href="#d2">2. Candidate Pipeline Flow (End-to-End Journey)</a>
+  <a href="#d3">3. Agent Interaction & Feedback Loops</a>
+  <a href="#d4">4. Interview Architecture (4 Question Sources)</a>
+  <a href="#d5">5. Smart Optimization Loops</a>
+  <a href="#d6">6. Build Order & Dependencies</a>
+</div>
+
+<!-- DIAGRAM 1: High-Level System Architecture -->
+<div class="diagram-section" id="d1">
+  <h2>1. High-Level System Architecture</h2>
+  <p>The 6 phases and 10 agents that compose the autonomous recruiting engine.</p>
+  <div class="mermaid">
+graph TB
+    subgraph P0["Phase 0: Human Input"]
+        direction TB
+        HI[/"Kickoff Form<br/>(Only Human Input)"/]
+        JID[(Job Input Document)]
+        HI --> JID
+    end
+
+    subgraph P1["Phase 1: Research & Strategy"]
+        direction TB
+        A1["Agent 1<br/>Domain Architect<br/>(The Professor)"]
+        A2["Agent 2<br/>Copywriter & SEO"]
+        RSD[(Role Strategy Document)]
+        JD[/Published JD/]
+        A1 --> RSD
+        RSD --> A2
+        A2 --> JD
+    end
+
+    subgraph P2["Phase 2: Headhunter Engine"]
+        direction TB
+        A3["Agent 3<br/>Outbound Hunter<br/>(Reed/LinkedIn Bot)"]
+        A4["Agent 4<br/>Acquisition Manager<br/>(Optimization Brain)"]
+        RE["Reputation Engine<br/>(Email Deliverability)"]
+        A3 --> RE
+        A4 -.->|"Optimizes"| A3
+        A4 -.->|"Adjusts"| A2
+    end
+
+    subgraph P3["Phase 3: Forensic Screener"]
+        direction TB
+        A5["Agent 5<br/>Forensic Analyst<br/>(BS Detector)"]
+        RS[(Resume Score<br/>0-100)]
+        SR[(Suspicion Report)]
+        A5 --> RS
+        A5 --> SR
+    end
+
+    subgraph P4["Phase 4: Pre-Screening"]
+        direction TB
+        A6["Agent 6<br/>Gatekeeper"]
+        IQ["Inbound:<br/>Questionnaire Email"]
+        OE["Outbound:<br/>Screening + Interview<br/>in One Email"]
+        A6 --> IQ
+        A6 --> OE
+    end
+
+    subgraph P5["Phase 5: The Interview"]
+        direction TB
+        A7["Agent 7<br/>Interview Architect<br/>(The Director)"]
+        A8["Agent 8<br/>Question Optimizer<br/>(The Learner)"]
+        A9["Agent 9<br/>Voice Interrogator<br/>(Gemini + Deepgram)"]
+        A10["Agent 10<br/>Adjudicator"]
+        IS[(Interview Script)]
+        A7 --> IS
+        IS --> A9
+        A9 --> A10
+        A8 -.->|"Optimizes Questions"| A7
+        A10 -.->|"Question Feedback"| A8
+    end
+
+    subgraph P6["Phase 6: Human Handoff"]
+        direction TB
+        DOS[/"Candidate Dossier"/]
+        FQ["Finalist Queue<br/>(Dashboard)"]
+        HD{"Human Decision"}
+        DOS --> FQ
+        FQ --> HD
+        HD -->|"Advance"| HI2["Schedule Interview"]
+        HD -->|"Reject"| REJ["Rejection Email"]
+        HD -->|"Hold"| HOLD["Pipeline Hold"]
+    end
+
+    JID --> A1
+    JID --> A5
+    JD --> A3
+    RS -->|"Score >= 70"| A6
+    RS -->|"Score < 70"| AUTO_REJ["Auto-Reject"]
+    A6 -->|"Pass"| A7
+    A10 --> DOS
+    A10 -.->|"Truth Loop"| A5
+
+    style P0 fill:#1a1a2e,stroke:#667eea,stroke-width:2px,color:#e0e0e0
+    style P1 fill:#1a1a2e,stroke:#764ba2,stroke-width:2px,color:#e0e0e0
+    style P2 fill:#1a1a2e,stroke:#e17055,stroke-width:2px,color:#e0e0e0
+    style P3 fill:#1a1a2e,stroke:#fdcb6e,stroke-width:2px,color:#e0e0e0
+    style P4 fill:#1a1a2e,stroke:#00b894,stroke-width:2px,color:#e0e0e0
+    style P5 fill:#1a1a2e,stroke:#0984e3,stroke-width:2px,color:#e0e0e0
+    style P6 fill:#1a1a2e,stroke:#6c5ce7,stroke-width:2px,color:#e0e0e0
+  </div>
+</div>
+
+<!-- DIAGRAM 2: Candidate Pipeline Flow -->
+<div class="diagram-section" id="d2">
+  <h2>2. Candidate Pipeline Flow</h2>
+  <p>End-to-end journey from application to hire decision, showing both inbound and outbound paths.</p>
+  <div class="mermaid">
+graph LR
+    subgraph Sources["Candidate Sources"]
+        IN["Inbound<br/>(Job Board / Email)"]
+        OUT["Outbound<br/>(Headhunted)"]
+    end
+
+    subgraph Screen["Screening"]
+        PARSE["Resume Parse<br/>(Agent 5)"]
+        SCORE{"Score >= 70?"}
+        PARSE --> SCORE
+    end
+
+    subgraph PreScreen["Pre-Screening"]
+        direction TB
+        IQ["Inbound Path:<br/>Questionnaire Email"]
+        OQ["Outbound Path:<br/>Requirements in<br/>Outreach Email"]
+        GATE{"Pass<br/>Gatekeeper?"}
+        IQ --> GATE
+        OQ --> GATE
+    end
+
+    subgraph Interview["AI Interview"]
+        direction TB
+        R1["Round 1: Wayne<br/>(Personality + Culture)"]
+        DOSS["Dossier Generation<br/>(Agent 7 + 10)"]
+        R2["Round 2: Atlas<br/>(Technical Deep-Dive)"]
+        VERDICT["Final Verdict<br/>(Agent 10)"]
+        R1 --> DOSS
+        DOSS --> R2
+        R2 --> VERDICT
+    end
+
+    subgraph Decision["Human Decision"]
+        QUEUE["Finalist Queue"]
+        DEC{"HR Decision"}
+        QUEUE --> DEC
+    end
+
+    IN --> PARSE
+    OUT --> PARSE
+    SCORE -->|"Yes"| PreScreen
+    SCORE -->|"No"| REJ1["CV_REJECTED"]
+    GATE -->|"Yes"| Interview
+    GATE -->|"No"| REJ2["REJECTED_PRESCREENING"]
+    VERDICT --> QUEUE
+    DEC -->|"Advance"| HIRE["Human Interview<br/>+ Offer"]
+    DEC -->|"Hold"| HOLD2["Pipeline Hold"]
+    DEC -->|"Reject"| REJ3["Polite Rejection"]
+
+    style Sources fill:#1e3a5f,stroke:#4fc3f7,color:#e0e0e0
+    style Screen fill:#1e3a3f,stroke:#81c784,color:#e0e0e0
+    style PreScreen fill:#3a2a1e,stroke:#ffb74d,color:#e0e0e0
+    style Interview fill:#2a1e3a,stroke:#ba68c8,color:#e0e0e0
+    style Decision fill:#1e2a3a,stroke:#64b5f6,color:#e0e0e0
+  </div>
+</div>
+
+<!-- DIAGRAM 3: Agent Interaction & Feedback Loops -->
+<div class="diagram-section" id="d3">
+  <h2>3. Agent Interaction & Feedback Loops</h2>
+  <p>How agents communicate and learn from each other. Dashed lines show feedback loops.</p>
+  <div class="mermaid">
+graph TB
+    A1["Agent 1<br/>Domain Architect"]
+    A2["Agent 2<br/>Copywriter"]
+    A3["Agent 3<br/>Outbound Hunter"]
+    A4["Agent 4<br/>Acquisition Mgr"]
+    A5["Agent 5<br/>Forensic Analyst"]
+    A6["Agent 6<br/>Gatekeeper"]
+    A7["Agent 7<br/>Interview Architect"]
+    A8["Agent 8<br/>Question Optimizer"]
+    A9["Agent 9<br/>Voice Interrogator"]
+    A10["Agent 10<br/>Adjudicator"]
+    HR["Human<br/>(HR / Hiring Mgr)"]
+
+    A1 -->|"Role Strategy Doc"| A2
+    A1 -->|"Research Insights"| A7
+    A2 -->|"Published JD"| A3
+    A3 -->|"Pipeline Metrics"| A4
+    A5 -->|"Resume Score"| A6
+    A5 -->|"Suspicion Report"| A7
+    A6 -->|"Qualified Candidates"| A7
+    A7 -->|"Interview Script"| A9
+    A9 -->|"Transcript + Recording"| A10
+    A10 -->|"Candidate Dossier"| HR
+
+    A4 -.->|"Noise Trap: Rewrite JD"| A2
+    A4 -.->|"Ghost Town: More Outbound"| A3
+    A4 -.->|"Broaden Keywords"| A1
+    A10 -.->|"Liar Loop: Tighten Screening"| A5
+    A10 -.->|"Question Feedback"| A8
+    A8 -.->|"Optimized Questions"| A7
+    HR -.->|"Rejection Reasons"| A4
+    HR -.->|"Misaligned Compass"| A9
+    A4 -.->|"Leaky Bucket: Fix Friction"| A9
+
+    linkStyle 10 stroke:#e17055,stroke-dasharray:5
+    linkStyle 11 stroke:#e17055,stroke-dasharray:5
+    linkStyle 12 stroke:#e17055,stroke-dasharray:5
+    linkStyle 13 stroke:#fdcb6e,stroke-dasharray:5
+    linkStyle 14 stroke:#0984e3,stroke-dasharray:5
+    linkStyle 15 stroke:#0984e3,stroke-dasharray:5
+    linkStyle 16 stroke:#6c5ce7,stroke-dasharray:5
+    linkStyle 17 stroke:#6c5ce7,stroke-dasharray:5
+    linkStyle 18 stroke:#e17055,stroke-dasharray:5
+
+    style A1 fill:#2d1b69,stroke:#a78bfa,color:#e0e0e0
+    style A2 fill:#2d1b69,stroke:#a78bfa,color:#e0e0e0
+    style A3 fill:#69291b,stroke:#e17055,color:#e0e0e0
+    style A4 fill:#69291b,stroke:#e17055,color:#e0e0e0
+    style A5 fill:#4a3f00,stroke:#fdcb6e,color:#e0e0e0
+    style A6 fill:#004a3f,stroke:#00b894,color:#e0e0e0
+    style A7 fill:#0d3b66,stroke:#0984e3,color:#e0e0e0
+    style A8 fill:#0d3b66,stroke:#0984e3,color:#e0e0e0
+    style A9 fill:#0d3b66,stroke:#0984e3,color:#e0e0e0
+    style A10 fill:#0d3b66,stroke:#0984e3,color:#e0e0e0
+    style HR fill:#3b0d66,stroke:#6c5ce7,color:#e0e0e0
+  </div>
+</div>
+
+<!-- DIAGRAM 4: Interview Architecture -->
+<div class="diagram-section" id="d4">
+  <h2>4. Interview Architecture (4 Question Sources)</h2>
+  <p>Agent 7 assembles personalized interview scripts from 4 distinct sources, each with pass/fail signals.</p>
+  <div class="mermaid">
+graph TB
+    subgraph S1["Source 1: Role Research"]
+        RSD2["Role Strategy Document<br/>(Agent 1)"]
+        RQ["Trend-based Questions<br/>e.g. Vector DBs, Prompt Eng"]
+    end
+
+    subgraph S2["Source 2: Company Context"]
+        JID2["Job Input Document<br/>(Phase 0)"]
+        CQ["Project-specific Questions<br/>e.g. Marketing AI, Dashboards"]
+    end
+
+    subgraph S3["Source 3: Resume-Specific"]
+        RES["Parsed Resume<br/>(Agent 5)"]
+        PQ["Personalized Probes<br/>e.g. Kitopi dashboard details"]
+    end
+
+    subgraph S4["Source 4: Red Flag Exploration"]
+        SUSP["Suspicion Report<br/>(Agent 5)"]
+        RFQ["Red Flag Questions<br/>e.g. No internship probing"]
+    end
+
+    RSD2 --> RQ
+    JID2 --> CQ
+    RES --> PQ
+    SUSP --> RFQ
+
+    A7B["Agent 7<br/>Interview Architect"]
+
+    RQ -->|"Priority 4"| A7B
+    CQ -->|"Priority 2"| A7B
+    PQ -->|"Priority 3"| A7B
+    RFQ -->|"Priority 1"| A7B
+
+    A7B --> SCRIPT["Personalized<br/>Interview Script<br/>with Pass/Fail Signals"]
+
+    SCRIPT --> A9B["Agent 9<br/>Voice Interrogator"]
+
+    A9B --> FU{"Follow-up<br/>Triggers"}
+    FU -->|"Vague answer"| SP["Give me specifics"]
+    FU -->|"We language"| OWN["What was YOUR role?"]
+    FU -->|"Theory only"| SHOW["Show me something you built"]
+
+    style S1 fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
+    style S2 fill:#1a1a2e,stroke:#667eea,color:#e0e0e0
+    style S3 fill:#1a1a2e,stroke:#00b894,color:#e0e0e0
+    style S4 fill:#1a1a2e,stroke:#e17055,color:#e0e0e0
+    style A7B fill:#0d3b66,stroke:#4fc3f7,color:#e0e0e0
+    style A9B fill:#0d3b66,stroke:#4fc3f7,color:#e0e0e0
+    style SCRIPT fill:#2a1e3a,stroke:#ba68c8,color:#e0e0e0
+  </div>
+</div>
+
+<!-- DIAGRAM 5: Smart Optimization Loops -->
+<div class="diagram-section" id="d5">
+  <h2>5. Smart Optimization Loops</h2>
+  <p>The 3 autonomous feedback loops that make the system self-improving.</p>
+  <div class="mermaid">
+graph TB
+    subgraph NL["NOISE LOOP"]
+        direction TB
+        NL_IN["High Volume +<br/>Low Resume Scores"]
+        NL_DEC["JD is too broad"]
+        NL_ACT["Agent 2: Rewrite JD<br/>Add knockout questions"]
+        NL_IN --> NL_DEC --> NL_ACT
+    end
+
+    subgraph RL["REACH LOOP"]
+        direction TB
+        RL_IN["Low Volume +<br/>High Resume Scores"]
+        RL_DEC["We are invisible"]
+        RL_ACT["Agent 3: More outbound<br/>Agent 1: Broaden keywords"]
+        RL_IN --> RL_DEC --> RL_ACT
+    end
+
+    subgraph LL["LIAR LOOP"]
+        direction TB
+        LL_IN["High Resume Score +<br/>Low Interview Score<br/>(5+ candidates)"]
+        LL_S1["Step 1: Check if<br/>questions are effective<br/>(Agent 8)"]
+        LL_S2["Step 2: If questions OK<br/>tighten resume screening<br/>(Agent 5)"]
+        LL_IN --> LL_S1 --> LL_S2
+    end
+
+    subgraph MC["MISALIGNED COMPASS"]
+        direction TB
+        MC_IN["High scores but<br/>HR keeps rejecting"]
+        MC_DEC["AI definition of good<br/>does not match human"]
+        MC_ACT["Analyze rejection reasons<br/>Update strategy + scoring"]
+        MC_IN --> MC_DEC --> MC_ACT
+    end
+
+    subgraph LB["LEAKY BUCKET"]
+        direction TB
+        LB_IN["High start rate +<br/>Low completion rate"]
+        LB_DEC["Interview has<br/>too much friction"]
+        LB_ACT["Shorten interview<br/>Send reminders<br/>Fix UX"]
+        LB_IN --> LB_DEC --> LB_ACT
+    end
+
+    A4_M["Agent 4<br/>Acquisition Manager<br/>(Monitors All Loops)"]
+
+    A4_M --> NL
+    A4_M --> RL
+    A4_M --> LL
+    A4_M --> MC
+    A4_M --> LB
+
+    style NL fill:#2a1a1a,stroke:#e17055,color:#e0e0e0
+    style RL fill:#1a2a1a,stroke:#00b894,color:#e0e0e0
+    style LL fill:#2a2a1a,stroke:#fdcb6e,color:#e0e0e0
+    style MC fill:#1a1a2a,stroke:#6c5ce7,color:#e0e0e0
+    style LB fill:#1a2a2a,stroke:#0984e3,color:#e0e0e0
+    style A4_M fill:#3a1a1a,stroke:#e17055,stroke-width:3px,color:#e0e0e0
+  </div>
+</div>
+
+<!-- DIAGRAM 6: Build Order & Dependencies -->
+<div class="diagram-section" id="d6">
+  <h2>6. Recommended Build Order & Dependencies</h2>
+  <p>Phased implementation plan showing which components to build first and their dependencies.</p>
+  <div class="mermaid">
+gantt
+    title Recruiter Brain - Build Order
+    dateFormat YYYY-MM-DD
+    axisFormat %b %d
+
+    section Phase A - Foundation (Weeks 1-3)
+    Kickoff Form (Phase 0)           :a1, 2026-01-06, 7d
+    Forensic Screener (Agent 5)      :a2, 2026-01-06, 10d
+    Gatekeeper (Agent 6)             :a3, after a2, 7d
+    Voice Interviewer (Agent 9)      :a4, 2026-01-06, 14d
+    Adjudicator (Agent 10)           :a5, after a4, 7d
+    Dashboard (Phase 6)              :a6, after a5, 7d
+
+    section Phase B - Intelligence (Weeks 4-6)
+    Domain Architect (Agent 1)       :b1, after a1, 10d
+    Copywriter (Agent 2)             :b2, after b1, 7d
+    Interview Architect (Agent 7)    :b3, after b1, 10d
+    Post-Round 2 Engagement          :b4, after a6, 7d
+
+    section Phase C - Acquisition (Weeks 7-10)
+    Outbound Hunter (Agent 3)        :c1, after b2, 14d
+    Acquisition Manager (Agent 4)    :c2, after c1, 10d
+    Feedback Loop (Phase 6)          :c3, after a6, 14d
+
+    section Phase D - Learning (Weeks 11-14)
+    Question Optimizer (Agent 8)     :d1, after b3, 14d
+    Smart Loops                      :d2, after c2, 14d
+    90-Day Outcome Tracking          :d3, after d1, 14d
+  </div>
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#1a1a2e',
+      primaryColor: '#667eea',
+      primaryTextColor: '#e0e0e0',
+      primaryBorderColor: '#4a4a6a',
+      lineColor: '#8888aa',
+      secondaryColor: '#764ba2',
+      tertiaryColor: '#2d1b69',
+      fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontSize: '14px',
+      nodeBorder: '#4a4a6a',
+      mainBkg: '#1e1e3a',
+      clusterBkg: '#12121a',
+      clusterBorder: '#4a4a6a',
+      titleColor: '#a78bfa',
+      edgeLabelBackground: '#1a1a2e',
+      nodeTextColor: '#e0e0e0'
+    },
+    flowchart: {
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 15,
+      nodeSpacing: 50,
+      rankSpacing: 60
+    },
+    gantt: {
+      barHeight: 25,
+      barGap: 6,
+      topPadding: 40,
+      leftPadding: 75,
+      gridLineStartPadding: 35,
+      fontSize: 12,
+      sectionFontSize: 14,
+      numberSectionStyles: 4
+    }
+  });
+</script>
+
+</body>
+</html>

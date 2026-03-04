@@ -1,0 +1,22 @@
+# Recruiting Bot Dependencies v2 - Force rebuild
+# For Railway deployment
+
+# Google APIs
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+google-genai
+
+# Supabase
+supabase
+
+# Environment  
+python-dotenv
+
+# HTTP
+requests
+httpx
+
+# Document parsing
+python-docx

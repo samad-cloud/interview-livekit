@@ -1,0 +1,8 @@
+{
+  "buildCommand": "next build",
+  "functions": {
+    "app/api/finalize-recording/route.ts": {
+      "maxDuration": 300
+    }
+  }
+}
