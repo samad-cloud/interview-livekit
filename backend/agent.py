@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LiveKit Interview Agent — replaces the manual Deepgram/Gemini/TTS pipeline.
+LiveKit Interview Agent — livekit-agents 1.x API.
 
 Runs as a separate Railway service. Connects to LiveKit rooms when candidates join
 and conducts the voice interview using Deepgram STT, Gemini LLM, and Deepgram TTS.
@@ -10,23 +10,24 @@ import asyncio
 import json
 import logging
 import time
-from typing import Optional
+from typing import AsyncIterable, Optional
 
-from livekit import api, rtc
 from livekit.agents import (
-    AutoSubscribe,
+    Agent,
+    AgentServer,
+    AgentSession,
+    ConversationItemAddedEvent,
     JobContext,
-    JobProcess,
-    WorkerOptions,
+    ModelSettings,
     cli,
     llm,
-    metrics,
 )
-from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, google, silero
 
 logger = logging.getLogger("interview-agent")
 logger.setLevel(logging.INFO)
+
+server = AgentServer()
 
 
 def build_serena_prompt(candidate_name: str, job_description: str, resume_text: str) -> str:
@@ -81,7 +82,6 @@ def build_nova_prompt(
     dossier: Optional[list],
 ) -> str:
     """Build Round 2 interviewer system prompt (Nova — technical depth)."""
-    dossier_questions = ""
     if dossier:
         dossier_questions = "\n".join(f"- {q}" for q in dossier)
     else:
@@ -123,14 +123,72 @@ You MUST include [END_INTERVIEW] at the very end. Do NOT add anything after it.
 You are Nova. You ASK technical questions. You do NOT answer questions about yourself."""
 
 
-def preinit_model(proc: JobProcess):
-    """Called once when the worker process starts — pre-load VAD model."""
-    proc.userdata["vad"] = silero.VAD.load()
+class InterviewAgent(Agent):
+    """Voice interview agent that injects elapsed time before each LLM call."""
+
+    def __init__(
+        self,
+        *,
+        system_prompt: str,
+        interviewer_name: str,
+        candidate_name: str,
+        round_num: int,
+        interview_duration_minutes: int,
+        wrap_up_at_minutes: int,
+        session_start: float,
+    ):
+        super().__init__(instructions=system_prompt)
+        self.interviewer_name = interviewer_name
+        self.candidate_name = candidate_name
+        self.round_num = round_num
+        self.interview_duration_minutes = interview_duration_minutes
+        self.wrap_up_at_minutes = wrap_up_at_minutes
+        self.session_start = session_start
+
+    async def on_enter(self) -> None:
+        """Speak opening greeting when agent enters the session."""
+        opening = (
+            f"Hello {self.candidate_name}, I'm {self.interviewer_name}. "
+            + (
+                "I'll be conducting your technical interview today. Let's dive right in. "
+                if self.round_num == 2
+                else "I'll be your interviewer today. Let's get started. "
+            )
+            + "Can you start by telling me a bit about yourself and what drew you to this role?"
+        )
+        await self.session.say(opening)
+
+    async def llm_node(
+        self,
+        chat_ctx: llm.ChatContext,
+        tools: list,
+        model_settings: ModelSettings,
+    ) -> AsyncIterable[llm.ChatChunk]:
+        """Inject elapsed time into context before each LLM inference."""
+        elapsed_minutes = (time.time() - self.session_start) / 60
+        is_wrapping_up = elapsed_minutes >= self.wrap_up_at_minutes
+
+        time_msg = (
+            f"\n=== TIME STATUS ===\n"
+            f"Elapsed: {elapsed_minutes:.0f} minutes of {self.interview_duration_minutes}-minute interview.\n"
+        )
+        if is_wrapping_up:
+            time_msg += (
+                "STATUS: TIME IS ALMOST UP. You MUST wrap up NOW. "
+                "Deliver your closing statement and end with [END_INTERVIEW].\n"
+            )
+        time_msg += "=== END TIME STATUS ==="
+
+        chat_ctx.add_message(role="system", content=time_msg)
+
+        async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+            yield chunk
 
 
+@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     """Called for each new interview room."""
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    await ctx.connect()
     logger.info(f"Agent connected to room: {ctx.room.name}")
 
     # Parse room metadata
@@ -160,102 +218,66 @@ async def entrypoint(ctx: JobContext):
     interview_duration_minutes = 40 if round_num == 2 else 20
     wrap_up_at_minutes = 38 if round_num == 2 else 18
 
-    # Track session state
     session_start = time.time()
-    interview_ended = False
     transcript: list[dict] = []
-
-    # Initial chat context
-    initial_ctx = llm.ChatContext().append(role="system", text=system_prompt)
+    interview_ended = False
 
     async def send_data(payload: dict):
-        """Send a data message to all participants in the room."""
         data = json.dumps(payload).encode()
         await ctx.room.local_participant.publish_data(data, reliable=True)
 
-    async def before_llm_cb(agent: VoicePipelineAgent, chat_ctx: llm.ChatContext):
-        """Inject elapsed time into LLM context before each call."""
-        nonlocal interview_ended
-        elapsed_minutes = (time.time() - session_start) / 60
-        is_wrapping_up = elapsed_minutes >= wrap_up_at_minutes
+    # Load VAD (silero caches after first load)
+    vad = silero.VAD.load()
 
-        time_msg = (
-            f"\n=== TIME STATUS ===\n"
-            f"Elapsed: {elapsed_minutes:.0f} minutes of {interview_duration_minutes}-minute interview.\n"
-        )
-        if is_wrapping_up:
-            time_msg += (
-                f"STATUS: TIME IS ALMOST UP. You MUST wrap up NOW. "
-                f"Deliver your closing statement and end with [END_INTERVIEW].\n"
-            )
-        time_msg += "=== END TIME STATUS ==="
+    session = AgentSession(
+        vad=vad,
+        stt=deepgram.STT(model="nova-2", language="en-US"),
+        llm=google.LLM(model="gemini-2.0-flash"),
+        tts=deepgram.TTS(model="aura-2-thalia-en"),
+    )
 
-        # Inject as a system addendum (don't modify original system message)
-        chat_ctx.messages.append(llm.ChatMessage(role="system", content=time_msg))
-
-    async def on_agent_speech_committed(agent: VoicePipelineAgent, message: llm.ChatMessage):
-        """Called after agent speaks — check for END_INTERVIEW signal."""
+    @session.on("conversation_item_added")
+    async def on_conversation_item_added(event: ConversationItemAddedEvent):
         nonlocal interview_ended
 
-        text = message.content if isinstance(message.content, str) else str(message.content)
+        text = event.item.text_content
+        if not text or not text.strip():
+            return
 
-        # Forward transcript to frontend
-        clean_text = text.replace("[END_INTERVIEW]", "").strip()
-        if clean_text:
-            entry = {"role": "interviewer", "speaker": interviewer_name, "text": clean_text}
-            transcript.append(entry)
-            await send_data({"type": "transcript", "entry": entry})
+        role = event.item.role  # "user" or "assistant"
 
-        # Detect end signal
-        if "[END_INTERVIEW]" in text and not interview_ended:
-            interview_ended = True
-            logger.info("END_INTERVIEW detected — signalling frontend")
-            await send_data({"type": "end_interview", "transcript": transcript})
-            # Give frontend 3 seconds to handle the signal before disconnecting
-            await asyncio.sleep(3)
-            await ctx.room.disconnect()
-
-    async def on_user_speech_committed(agent: VoicePipelineAgent, message: llm.ChatMessage):
-        """Called after candidate finishes speaking (STT committed)."""
-        text = message.content if isinstance(message.content, str) else str(message.content)
-        if text.strip():
+        if role == "user":
             entry = {"role": "candidate", "speaker": candidate_name, "text": text.strip()}
             transcript.append(entry)
             await send_data({"type": "transcript", "entry": entry})
 
-    # Create the voice pipeline agent
-    agent = VoicePipelineAgent(
-        vad=ctx.proc.userdata["vad"],
-        stt=deepgram.STT(model="nova-2", language="en-US"),
-        llm=google.LLM(model="gemini-2.0-flash"),
-        tts=deepgram.TTS(model="aura-2-thalia-en"),
-        chat_ctx=initial_ctx,
-        before_llm_cb=before_llm_cb,
+        elif role == "assistant":
+            clean_text = text.replace("[END_INTERVIEW]", "").strip()
+            if clean_text:
+                entry = {"role": "interviewer", "speaker": interviewer_name, "text": clean_text}
+                transcript.append(entry)
+                await send_data({"type": "transcript", "entry": entry})
+
+            if "[END_INTERVIEW]" in text and not interview_ended:
+                interview_ended = True
+                logger.info("END_INTERVIEW detected — signalling frontend")
+                await send_data({"type": "end_interview", "transcript": transcript})
+                await asyncio.sleep(3)
+                await ctx.room.disconnect()
+
+    agent = InterviewAgent(
+        system_prompt=system_prompt,
+        interviewer_name=interviewer_name,
+        candidate_name=candidate_name,
+        round_num=round_num,
+        interview_duration_minutes=interview_duration_minutes,
+        wrap_up_at_minutes=wrap_up_at_minutes,
+        session_start=session_start,
     )
 
-    agent.on("agent_speech_committed", on_agent_speech_committed)
-    agent.on("user_speech_committed", on_user_speech_committed)
-
-    # Wait for a participant to actually connect before starting
-    await ctx.wait_for_participant()
-
-    agent.start(ctx.room)
-    logger.info(f"Agent started for {candidate_name} (Round {round_num})")
-
-    # Opening greeting
-    opening = (
-        f"Hello {candidate_name}, I'm {interviewer_name}. "
-        + ("I'll be conducting your technical interview today. Let's dive right in. " if round_num == 2
-           else "I'll be your interviewer today. Let's get started. ")
-        + "Can you start by telling me a bit about yourself and what drew you to this role?"
-    )
-    await agent.say(opening, allow_interruptions=True)
+    await session.start(room=ctx.room, agent=agent)
+    logger.info(f"Session started for {candidate_name} (Round {round_num})")
 
 
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            prewarm_fnc=preinit_model,
-        )
-    )
+    cli.run_app(server)
