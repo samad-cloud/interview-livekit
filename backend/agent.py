@@ -307,6 +307,14 @@ async def entrypoint(ctx: JobContext):
         session_start=session_start,
     )
 
+    # Disconnect this agent when the candidate leaves so stale agents don't
+    # linger in the room and cause duplicate greetings on reconnect.
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant):
+        if "candidate-" in participant.identity and not interview_ended:
+            logger.info(f"Candidate {participant.identity} disconnected — agent leaving room")
+            asyncio.create_task(ctx.room.disconnect())
+
     await session.start(room=ctx.room, agent=agent)
     logger.info(f"Session started for {candidate_name} (Round {round_num})")
 
