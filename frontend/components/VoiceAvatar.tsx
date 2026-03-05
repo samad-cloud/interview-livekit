@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Room, RoomEvent, ConnectionState, Track } from 'livekit-client';
+import { Room, RoomEvent, ConnectionState, Track, type TranscriptionSegment } from 'livekit-client';
 import { Mic, CameraOff, Loader2, Volume2, AlertCircle, Clock, X } from 'lucide-react';
 import Image from 'next/image';
 
@@ -66,8 +66,14 @@ export default function VoiceAvatar({
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [showExitModal, setShowExitModal] = useState(false);
 
-  // Subtitle: last spoken line
-  const [subtitle, setSubtitle] = useState('');
+  // Live subtitle: what is being said right now
+  type SubtitleMode = 'agent' | 'user' | 'listening';
+  const [liveText, setLiveText] = useState('');
+  const [subtitleMode, setSubtitleMode] = useState<SubtitleMode>('listening');
+
+  // Done Speaking button — shown only when agent has fully finished (debounced)
+  const [showDoneButton, setShowDoneButton] = useState(false);
+  const doneButtonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const roomRef = useRef<Room | null>(null);
@@ -91,24 +97,27 @@ export default function VoiceAvatar({
   // Keep conversationRef in sync
   conversationRef.current = conversation;
 
-  // Mute mic while agent speaks; unmute when agent finishes (after first turn)
+  // Mic mute + subtitle mode + done-button — all driven by isAgentSpeaking
   useEffect(() => {
     const room = roomRef.current;
     if (!room) return;
+
     if (isAgentSpeaking) {
+      // Agent started speaking: mute mic, cancel pending done-button timer, hide button
       agentHasSpokenRef.current = true;
       room.localParticipant.setMicrophoneEnabled(false).catch(() => {});
+      if (doneButtonTimerRef.current) clearTimeout(doneButtonTimerRef.current);
+      setShowDoneButton(false);
+      setSubtitleMode('agent');
     } else if (agentHasSpokenRef.current) {
+      // Agent finished: unmute mic, switch to listening, show done button after debounce
       room.localParticipant.setMicrophoneEnabled(true).catch(() => {});
+      setLiveText('');
+      setSubtitleMode('listening');
+      doneButtonTimerRef.current = setTimeout(() => setShowDoneButton(true), 800);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAgentSpeaking]);
-
-  // Subtitle: update whenever conversation changes
-  useEffect(() => {
-    if (conversation.length > 0) {
-      setSubtitle(conversation[conversation.length - 1].text);
-    }
-  }, [conversation]);
 
   // ── Timer ─────────────────────────────────────────────────────────────────
 
@@ -264,6 +273,20 @@ export default function VoiceAvatar({
         track.detach().forEach((el) => el.remove());
       });
 
+      // Real-time transcription: show text as agent/user speaks
+      room.on(RoomEvent.TranscriptionReceived, (segments: TranscriptionSegment[], participant) => {
+        const text = segments.map(s => s.text).join('').trim();
+        if (!text) return;
+        const isAgent = participant?.identity?.startsWith('agent') ?? false;
+        if (isAgent) {
+          setLiveText(text);
+          setSubtitleMode('agent');
+        } else {
+          setLiveText(text);
+          setSubtitleMode('user');
+        }
+      });
+
       await room.connect(serverUrl, token);
       await room.startAudio();
       // Start with mic muted — unmuted automatically after agent finishes first turn
@@ -371,6 +394,7 @@ export default function VoiceAvatar({
     return () => {
       stopTimer();
       stopCamera();
+      if (doneButtonTimerRef.current) clearTimeout(doneButtonTimerRef.current);
       roomRef.current?.disconnect();
     };
   }, [stopTimer, stopCamera]);
@@ -672,20 +696,22 @@ export default function VoiceAvatar({
         </div>
       )}
 
-      {/* Subtitle area */}
+      {/* Subtitle area — live real-time display */}
       <div className="min-h-24 max-h-48 bg-card/80 backdrop-blur-sm border-t border-border flex items-end justify-center px-8 py-4 overflow-y-auto">
         <div className="max-w-3xl w-full text-center">
-          {lastEntry?.role === 'interviewer' && (
-            <p className="text-foreground text-base font-medium leading-relaxed">{lastEntry.text}</p>
+          {subtitleMode === 'agent' && liveText && (
+            <p className="text-foreground text-base font-medium leading-relaxed">{liveText}</p>
           )}
-          {lastEntry?.role === 'candidate' && (
-            <p className="text-cyan-400 text-base italic leading-relaxed">&ldquo;{lastEntry.text}&rdquo;</p>
+          {subtitleMode === 'user' && liveText && (
+            <p className="text-cyan-400 text-base italic leading-relaxed">&ldquo;{liveText}&rdquo;</p>
           )}
-          {!lastEntry && (
+          {(subtitleMode === 'listening' || !liveText) && (
             <p className="text-muted-foreground text-lg">
-              {connectionState === ConnectionState.Connected
-                ? 'Interview starting — please wait...'
-                : 'Connecting...'}
+              {!agentHasSpokenRef.current
+                ? connectionState === ConnectionState.Connected
+                  ? 'Interview starting — please wait...'
+                  : 'Connecting...'
+                : 'Listening...'}
             </p>
           )}
         </div>
@@ -693,10 +719,12 @@ export default function VoiceAvatar({
 
       {/* Control bar */}
       <div className="h-24 bg-card border-t border-border flex items-center justify-center gap-6">
-        {/* Done Speaking — signals end of user turn; agent will respond */}
-        {!isAgentSpeaking && agentHasSpokenRef.current && (
+        {/* Done Speaking — only shows after agent fully finishes (debounced) */}
+        {showDoneButton && (
           <button
             onClick={async () => {
+              setShowDoneButton(false);
+              if (doneButtonTimerRef.current) clearTimeout(doneButtonTimerRef.current);
               if (roomRef.current) {
                 await roomRef.current.localParticipant.setMicrophoneEnabled(false);
               }
