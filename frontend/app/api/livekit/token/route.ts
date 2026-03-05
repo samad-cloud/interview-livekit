@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   AccessToken,
+  AgentDispatchClient,
   EgressClient,
   EncodedFileOutput,
   RoomServiceClient,
@@ -56,6 +57,15 @@ export async function POST(req: NextRequest) {
     });
   } catch {
     // Room may already exist — that's fine
+  }
+
+  // Dispatch the agent to the room (livekit-agents 1.x requires explicit dispatch)
+  try {
+    const agentDispatch = new AgentDispatchClient(livekitUrl, apiKey, apiSecret);
+    await agentDispatch.createDispatch(roomName, '');
+    console.log(`[LiveKit] Agent dispatched to room ${roomName}`);
+  } catch (err) {
+    console.error('[LiveKit] Agent dispatch failed:', err);
   }
 
   // Issue candidate participant token

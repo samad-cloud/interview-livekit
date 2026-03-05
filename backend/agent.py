@@ -236,8 +236,7 @@ async def entrypoint(ctx: JobContext):
         tts=deepgram.TTS(model="aura-2-thalia-en"),
     )
 
-    @session.on("conversation_item_added")
-    async def on_conversation_item_added(event: ConversationItemAddedEvent):
+    async def _handle_conversation_item(event: ConversationItemAddedEvent):
         nonlocal interview_ended
 
         text = event.item.text_content
@@ -264,6 +263,10 @@ async def entrypoint(ctx: JobContext):
                 await send_data({"type": "end_interview", "transcript": transcript})
                 await asyncio.sleep(3)
                 await ctx.room.disconnect()
+
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(event: ConversationItemAddedEvent):
+        asyncio.create_task(_handle_conversation_item(event))
 
     agent = InterviewAgent(
         system_prompt=system_prompt,
