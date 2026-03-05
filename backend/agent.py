@@ -195,7 +195,10 @@ class InterviewAgent(Agent):
     ) -> AsyncIterable[llm.ChatChunk]:
         """Inject elapsed time into context before each LLM inference."""
         elapsed_minutes = (time.time() - self.session_start) / 60
-        is_wrapping_up = elapsed_minutes >= self.wrap_up_at_minutes
+        # Safety guard: never trigger wrap-up before 60% of the interview has passed,
+        # regardless of the elapsed clock (prevents stale session_start causing early exit)
+        min_before_wrapup = self.interview_duration_minutes * 0.6
+        is_wrapping_up = elapsed_minutes >= self.wrap_up_at_minutes and elapsed_minutes >= min_before_wrapup
 
         time_msg = (
             f"\n=== TIME STATUS ===\n"
