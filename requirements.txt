@@ -21,6 +21,6 @@ httpx
 # Document parsing
 python-docx
 
-# LiveKit Agent
-livekit-agents[deepgram,google,silero,turn]>=0.12.0
-livekit-api>=0.7.0
+# LiveKit Agent (pin to 0.x — agent.py uses 0.x API)
+livekit-agents[deepgram,google,silero,turn]>=0.12.0,<1.0.0
+livekit-api>=0.7.0,<1.0.0
