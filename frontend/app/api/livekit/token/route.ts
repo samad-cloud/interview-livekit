@@ -73,15 +73,24 @@ export async function POST(req: NextRequest) {
   });
   console.log(`[LiveKit] Created fresh room ${roomName}`);
 
-  // Dispatch agent — check for existing dispatches first to prevent duplicates
+  // Dispatch agent.
+  // LiveKit Cloud may auto-dispatch a worker when the room is created (~100-300ms later).
+  // We wait 400ms then check listDispatch — if an auto-dispatch already exists, skip ours.
+  // This prevents the consistent "2 agents per room" issue caused by auto-dispatch + explicit dispatch.
   try {
     const agentDispatch = new AgentDispatchClient(livekitUrl, apiKey, apiSecret);
-    const existingDispatches = await agentDispatch.listDispatches(roomName).catch(() => []);
+
+    // Wait for potential auto-dispatch to register
+    await new Promise(r => setTimeout(r, 400));
+
+    const existingDispatches = await agentDispatch.listDispatch(roomName).catch(() => []);
+    console.log(`[LiveKit] Existing dispatches for ${roomName}: ${existingDispatches.length}`);
+
     if (existingDispatches.length === 0) {
       await agentDispatch.createDispatch(roomName, '');
-      console.log(`[LiveKit] Agent dispatched to room ${roomName}`);
+      console.log(`[LiveKit] Agent explicitly dispatched to room ${roomName}`);
     } else {
-      console.log(`[LiveKit] Agent already dispatched to room ${roomName} — skipping duplicate`);
+      console.log(`[LiveKit] Auto-dispatch already present — skipping explicit dispatch for ${roomName}`);
     }
   } catch (err) {
     console.error('[LiveKit] Agent dispatch failed:', err);
