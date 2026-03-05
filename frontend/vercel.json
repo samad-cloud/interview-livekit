@@ -1,8 +1,4 @@
 {
   "buildCommand": "next build",
-  "functions": {
-    "app/api/finalize-recording/route.ts": {
-      "maxDuration": 300
-    }
-  }
+  "installCommand": "npm install --ignore-scripts && npm install @tailwindcss/oxide-linux-x64-gnu lightningcss-linux-x64-gnu"
 }
