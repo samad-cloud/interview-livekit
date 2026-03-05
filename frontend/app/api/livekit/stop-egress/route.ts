@@ -3,7 +3,7 @@ import { EgressClient, RoomServiceClient } from 'livekit-server-sdk';
 import { createClient } from '@supabase/supabase-js';
 
 export async function POST(req: NextRequest) {
-  const { egressId, candidateId, round } = await req.json();
+  const { egressId, candidateId, round, roomName: roomNameParam } = await req.json();
 
   if (!egressId) {
     return NextResponse.json({ success: false, error: 'No egressId' }, { status: 400 });
@@ -18,8 +18,8 @@ export async function POST(req: NextRequest) {
     const egress = await egressClient.stopEgress(egressId);
 
     // Delete the room so it doesn't linger with stale state
-    if (candidateId && round) {
-      const roomName = `interview-${candidateId}-r${round}`;
+    if (candidateId && (roomNameParam || round)) {
+      const roomName = roomNameParam || `interview-${candidateId}-r${round}`;
       try {
         const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
         await roomService.deleteRoom(roomName);

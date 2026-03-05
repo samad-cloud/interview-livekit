@@ -78,6 +78,7 @@ export default function VoiceAvatar({
   // ── Refs ──────────────────────────────────────────────────────────────────
   const roomRef = useRef<Room | null>(null);
   const egressIdRef = useRef<string | null>(null);
+  const roomNameRef = useRef<string | null>(null);
   const interviewStartRef = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const conversationRef = useRef<ConversationEntry[]>([]);
@@ -172,7 +173,7 @@ export default function VoiceAvatar({
         await fetch('/api/livekit/stop-egress', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ egressId: egressIdRef.current, candidateId, round }),
+          body: JSON.stringify({ egressId: egressIdRef.current, candidateId, round, roomName: roomNameRef.current }),
         });
       } catch (err) {
         console.error('[VoiceAvatar] Stop egress failed:', err);
@@ -220,8 +221,9 @@ export default function VoiceAvatar({
       });
 
       if (!tokenRes.ok) throw new Error('Failed to get LiveKit token');
-      const { token, serverUrl, egressId } = await tokenRes.json();
+      const { token, serverUrl, egressId, roomName } = await tokenRes.json();
       egressIdRef.current = egressId;
+      roomNameRef.current = roomName;
 
       const room = new Room({
         adaptiveStream: true,

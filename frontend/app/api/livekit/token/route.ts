@@ -32,16 +32,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'LiveKit not configured' }, { status: 500 });
   }
 
-  const roomName = `interview-${candidateId}-r${round}`;
+  const baseRoomName = `interview-${candidateId}-r${round}`;
+  const roomName = `${baseRoomName}-${Date.now()}`;
   const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
 
-  // Always delete the old room first so every interview starts completely fresh
-  // (no stale agents, no stale egress, no stale dispatches)
+  // Delete ALL existing rooms for this candidate+round (handles both legacy names and
+  // previous timestamped names). This prevents stale agents from the previous session
+  // racing into the new room — even if deleteRoom finishes before the agent disconnects,
+  // the agent can't rejoin because the new room has a different (timestamped) name.
   try {
-    await roomService.deleteRoom(roomName);
-    console.log(`[LiveKit] Deleted old room ${roomName}`);
+    const allRooms = await roomService.listRooms();
+    const oldRooms = allRooms.filter(r => r.name.startsWith(baseRoomName));
+    await Promise.all(oldRooms.map(r => roomService.deleteRoom(r.name).catch(() => {})));
+    if (oldRooms.length > 0) {
+      console.log(`[LiveKit] Deleted ${oldRooms.length} old room(s) for ${baseRoomName}`);
+    }
   } catch {
-    // Room didn't exist — that's fine
+    // listRooms failed — proceed anyway
   }
 
   // Metadata embedded in room — agent reads this to configure itself
