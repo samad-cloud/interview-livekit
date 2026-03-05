@@ -97,6 +97,13 @@ export default function VoiceAvatar({
   // Keep conversationRef in sync
   conversationRef.current = conversation;
 
+  // Attach camera stream to preview video once the element renders
+  useEffect(() => {
+    if (mediaCheckDone && !cameraError && checkVideoRef.current && userStreamRef.current) {
+      checkVideoRef.current.srcObject = userStreamRef.current;
+    }
+  }, [mediaCheckDone, cameraError]);
+
   // Mic mute + subtitle mode + done-button — all driven by isAgentSpeaking
   useEffect(() => {
     const room = roomRef.current;
@@ -337,9 +344,7 @@ export default function VoiceAvatar({
     if (stream) {
       userStreamRef.current = stream;
 
-      if (videoOk && checkVideoRef.current) {
-        checkVideoRef.current.srcObject = stream;
-      }
+      // srcObject attached via useEffect once mediaCheckDone triggers re-render
 
       // Mic level visualiser
       if (audioOk) {

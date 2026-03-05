@@ -120,7 +120,7 @@ export async function POST(req: NextRequest) {
       const egress = await egressClient.startRoomCompositeEgress(
         roomName,
         fileOutput,
-        { audioOnly: true, layout: 'speaker' },
+        { layout: 'speaker' },
       );
 
       egressId = egress.egressId;
