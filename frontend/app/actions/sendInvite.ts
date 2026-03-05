@@ -4,8 +4,8 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { google } from 'googleapis';
 import { generateDossier } from './generateDossier';
 
-const INTERVIEW_BASE_URL = 'https://interview-link.vercel.app/interview';
-const ROUND2_BASE_URL = 'https://interview-link.vercel.app/round2';
+const INTERVIEW_BASE_URL = 'https://printerpix-recruitment.vercel.app/interview';
+const ROUND2_BASE_URL = 'https://printerpix-recruitment.vercel.app/round2';
 const COMPANY_NAME = 'Printerpix';
 
 /** Replace {variable} placeholders in a template string. */
