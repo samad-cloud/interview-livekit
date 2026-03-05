@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Room, RoomEvent, DataPacket_Kind, ConnectionState } from 'livekit-client';
+import { Room, RoomEvent, ConnectionState } from 'livekit-client';
 import { Mic, CameraOff, Loader2, Volume2, AlertCircle, Clock, Monitor, X } from 'lucide-react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabaseClient';
