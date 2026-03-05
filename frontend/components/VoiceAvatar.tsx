@@ -705,14 +705,15 @@ export default function VoiceAvatar({
           {subtitleMode === 'user' && liveText && (
             <p className="text-cyan-400 text-base italic leading-relaxed">&ldquo;{liveText}&rdquo;</p>
           )}
-          {(subtitleMode === 'listening' || !liveText) && (
+          {!agentHasSpokenRef.current && (
             <p className="text-muted-foreground text-lg">
-              {!agentHasSpokenRef.current
-                ? connectionState === ConnectionState.Connected
-                  ? 'Interview starting — please wait...'
-                  : 'Connecting...'
-                : 'Listening...'}
+              {connectionState === ConnectionState.Connected
+                ? 'Interview starting — please wait...'
+                : 'Connecting...'}
             </p>
+          )}
+          {agentHasSpokenRef.current && subtitleMode === 'listening' && showDoneButton && (
+            <p className="text-muted-foreground text-lg">Listening...</p>
           )}
         </div>
       </div>
