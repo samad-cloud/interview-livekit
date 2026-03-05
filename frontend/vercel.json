@@ -1,4 +1,4 @@
 {
   "buildCommand": "next build",
-  "installCommand": "npm install --ignore-scripts && npm install @tailwindcss/oxide-linux-x64-gnu lightningcss-linux-x64-gnu"
+  "installCommand": "npm install"
 }
