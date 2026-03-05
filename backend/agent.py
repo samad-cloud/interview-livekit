@@ -227,7 +227,7 @@ async def entrypoint(ctx: JobContext):
         await ctx.room.local_participant.publish_data(data, reliable=True)
 
     # Load VAD (silero caches after first load)
-    vad = silero.VAD.load()
+    vad = silero.VAD.load(min_silence_duration=2.0)
 
     session = AgentSession(
         vad=vad,

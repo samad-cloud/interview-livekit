@@ -1,10 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Room, RoomEvent, ConnectionState } from 'livekit-client';
-import { Mic, CameraOff, Loader2, Volume2, AlertCircle, Clock, Monitor, X } from 'lucide-react';
+import { Room, RoomEvent, ConnectionState, Track } from 'livekit-client';
+import { Mic, CameraOff, Loader2, Volume2, AlertCircle, Clock, X } from 'lucide-react';
 import Image from 'next/image';
-import { supabase } from '@/lib/supabaseClient';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -26,11 +25,11 @@ interface VoiceAvatarProps {
 }
 
 type InterviewPhase =
-  | 'permission'      // requesting mic access
-  | 'connecting'      // joining LiveKit room
-  | 'active'          // interview in progress
-  | 'ending'          // END_INTERVIEW received, submitting scores
-  | 'completed';      // all done
+  | 'idle'        // start screen + camera/mic check
+  | 'connecting'  // joining LiveKit room
+  | 'active'      // interview in progress
+  | 'ending'      // submitting scores
+  | 'completed';  // all done
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -45,28 +44,73 @@ export default function VoiceAvatar({
 }: VoiceAvatarProps) {
 
   const interviewerName = round === 2 ? 'Nova' : 'Serena';
+  const interviewerTitle = round === 2 ? 'Technical Interviewer' : 'Talent Scout';
+  const interviewMinutes = round === 2 ? 40 : 15;
+  const wrapUpAt = round === 2 ? 38 * 60 : 13 * 60;
 
-  // State
-  const [phase, setPhase] = useState<InterviewPhase>('permission');
-  const [conversation, setConversation] = useState<ConversationEntry[]>([]);
+  // ── Phase & error state ───────────────────────────────────────────────────
+  const [phase, setPhase] = useState<InterviewPhase>('idle');
+  const [error, setError] = useState<string | null>(null);
+
+  // ── Media check state ─────────────────────────────────────────────────────
+  const [mediaCheckDone, setMediaCheckDone] = useState(false);
+  const [micLevel, setMicLevel] = useState(0);
+  const [cameraError, setCameraError] = useState(false);
+  const [micError, setMicError] = useState(false);
+
+  // ── Active interview state ────────────────────────────────────────────────
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.Disconnected);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [micError, setMicError] = useState<string | null>(null);
+  const [conversation, setConversation] = useState<ConversationEntry[]>([]);
+  const [isCameraOn, setIsCameraOn] = useState(false);
+  const [showExitModal, setShowExitModal] = useState(false);
 
-  // Refs
+  // Subtitle: last spoken line
+  const [subtitle, setSubtitle] = useState('');
+
+  // ── Refs ──────────────────────────────────────────────────────────────────
   const roomRef = useRef<Room | null>(null);
   const egressIdRef = useRef<string | null>(null);
   const interviewStartRef = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const conversationRef = useRef<ConversationEntry[]>([]);
-  const endingRef = useRef(false);  // prevent double-end
+  const endingRef = useRef(false);
 
-  // Keep conversationRef in sync for use in callbacks
+  // Camera refs
+  const checkVideoRef = useRef<HTMLVideoElement>(null);
+  const userVideoRef = useRef<HTMLVideoElement>(null);
+  const userStreamRef = useRef<MediaStream | null>(null);
+  const micAnimFrameRef = useRef<number | null>(null);
+  const micAnalyserRef = useRef<AnalyserNode | null>(null);
+  const micAudioCtxRef = useRef<AudioContext | null>(null);
+
+  // Turn-taking: track whether agent has spoken at least once
+  const agentHasSpokenRef = useRef(false);
+
+  // Keep conversationRef in sync
   conversationRef.current = conversation;
 
-  // ── Timer ──────────────────────────────────────────────────────────────────
+  // Mute mic while agent speaks; unmute when agent finishes (after first turn)
+  useEffect(() => {
+    const room = roomRef.current;
+    if (!room) return;
+    if (isAgentSpeaking) {
+      agentHasSpokenRef.current = true;
+      room.localParticipant.setMicrophoneEnabled(false).catch(() => {});
+    } else if (agentHasSpokenRef.current) {
+      room.localParticipant.setMicrophoneEnabled(true).catch(() => {});
+    }
+  }, [isAgentSpeaking]);
+
+  // Subtitle: update whenever conversation changes
+  useEffect(() => {
+    if (conversation.length > 0) {
+      setSubtitle(conversation[conversation.length - 1].text);
+    }
+  }, [conversation]);
+
+  // ── Timer ─────────────────────────────────────────────────────────────────
 
   const startTimer = useCallback(() => {
     interviewStartRef.current = Date.now();
@@ -82,40 +126,48 @@ export default function VoiceAvatar({
     }
   }, []);
 
-  // ── End interview ──────────────────────────────────────────────────────────
+  // ── Stop camera stream ────────────────────────────────────────────────────
+
+  const stopCamera = useCallback(() => {
+    if (micAnimFrameRef.current) {
+      cancelAnimationFrame(micAnimFrameRef.current);
+      micAnimFrameRef.current = null;
+    }
+    micAudioCtxRef.current?.close();
+    micAudioCtxRef.current = null;
+    userStreamRef.current?.getTracks().forEach(t => t.stop());
+    userStreamRef.current = null;
+    setIsCameraOn(false);
+  }, []);
+
+  // ── End interview ─────────────────────────────────────────────────────────
 
   const endInterview = useCallback(async (finalConversation?: ConversationEntry[]) => {
     if (endingRef.current) return;
     endingRef.current = true;
     setPhase('ending');
     stopTimer();
+    stopCamera();
 
     const transcriptToSubmit = finalConversation || conversationRef.current;
 
-    // Stop Egress recording and get video URL
     if (egressIdRef.current) {
       try {
         await fetch('/api/livekit/stop-egress', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            egressId: egressIdRef.current,
-            candidateId,
-            round,
-          }),
+          body: JSON.stringify({ egressId: egressIdRef.current, candidateId, round }),
         });
       } catch (err) {
         console.error('[VoiceAvatar] Stop egress failed:', err);
       }
     }
 
-    // Disconnect from room
     if (roomRef.current) {
       await roomRef.current.disconnect();
       roomRef.current = null;
     }
 
-    // Submit transcript for scoring (same API as before — unchanged)
     const endpoint = round === 2 ? '/api/end-interview-round2' : '/api/end-interview';
     try {
       await fetch(endpoint, {
@@ -135,7 +187,7 @@ export default function VoiceAvatar({
     }
 
     setPhase('completed');
-  }, [candidateId, round, stopTimer]);
+  }, [candidateId, round, stopTimer, stopCamera]);
 
   // ── Connect to LiveKit room ────────────────────────────────────────────────
 
@@ -143,27 +195,18 @@ export default function VoiceAvatar({
     setPhase('connecting');
 
     try {
-      // Get a LiveKit token from our server
       const tokenRes = await fetch('/api/livekit/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          candidateId,
-          round,
-          candidateName,
-          jobTitle,
-          jobDescription,
-          resumeText,
-          dossier,
+          candidateId, round, candidateName, jobTitle, jobDescription, resumeText, dossier,
         }),
       });
 
       if (!tokenRes.ok) throw new Error('Failed to get LiveKit token');
       const { token, serverUrl, egressId } = await tokenRes.json();
-
       egressIdRef.current = egressId;
 
-      // Create and connect LiveKit room
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,
@@ -175,7 +218,6 @@ export default function VoiceAvatar({
       });
       roomRef.current = room;
 
-      // Connection state tracking
       room.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
         setConnectionState(state);
         if (state === ConnectionState.Connected) {
@@ -188,69 +230,152 @@ export default function VoiceAvatar({
         }
       });
 
-      // Data messages from agent
       room.on(RoomEvent.DataReceived, (data: Uint8Array) => {
         try {
           const msg = JSON.parse(new TextDecoder().decode(data));
-
           if (msg.type === 'transcript' && msg.entry) {
-            const entry: ConversationEntry = {
-              ...msg.entry,
-              timestamp: new Date(),
-            };
+            const entry: ConversationEntry = { ...msg.entry, timestamp: new Date() };
             setConversation(prev => [...prev, entry]);
           } else if (msg.type === 'end_interview') {
-            // Agent signalled end — use the transcript it sends
             const agentTranscript: ConversationEntry[] = (msg.transcript || []).map(
               (e: Omit<ConversationEntry, 'timestamp'>) => ({ ...e, timestamp: new Date() })
             );
             endInterview(agentTranscript.length > 0 ? agentTranscript : undefined);
           }
         } catch {
-          // Ignore malformed data messages
+          // Ignore malformed messages
         }
       });
 
-      // Track when agent is speaking (their audio track becomes active)
       room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
         const agentIsSpeaking = speakers.some(p => p.identity.startsWith('agent'));
         setIsAgentSpeaking(agentIsSpeaking);
       });
 
-      // Connect to room and publish microphone
+      // Auto-attach remote audio tracks so agent voice is audible
+      room.on(RoomEvent.TrackSubscribed, (track) => {
+        if (track.kind === Track.Kind.Audio) {
+          const el = track.attach();
+          el.autoplay = true;
+          document.body.appendChild(el);
+        }
+      });
+      room.on(RoomEvent.TrackUnsubscribed, (track) => {
+        track.detach().forEach((el) => el.remove());
+      });
+
       await room.connect(serverUrl, token);
-      await room.localParticipant.setMicrophoneEnabled(true);
+      await room.startAudio();
+      // Start with mic muted — unmuted automatically after agent finishes first turn
+      await room.localParticipant.setMicrophoneEnabled(false);
+
+      // Wire user camera to PiP video element after connecting
+      if (userStreamRef.current && userVideoRef.current) {
+        userVideoRef.current.srcObject = userStreamRef.current;
+        setIsCameraOn(true);
+      }
 
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Connection failed';
       console.error('[VoiceAvatar] Connect error:', err);
       setError(`Could not connect to interview: ${message}`);
-      setPhase('permission');
+      setPhase('idle');
     }
   }, [candidateId, round, candidateName, jobTitle, jobDescription, resumeText, dossier, endInterview, startTimer]);
 
-  // ── Request mic permission ─────────────────────────────────────────────────
+  // ── Camera + mic check ────────────────────────────────────────────────────
 
-  const requestPermission = useCallback(async () => {
+  const startMediaCheck = useCallback(async () => {
+    setCameraError(false);
+    setMicError(false);
+
+    let videoOk = false;
+    let audioOk = false;
+    let stream: MediaStream | null = null;
+
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-      setMicError(null);
-      await connectToRoom();
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      videoOk = true;
+      audioOk = true;
     } catch {
-      setMicError('Microphone access is required. Please allow access and try again.');
+      // Try audio-only
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioOk = true;
+        setCameraError(true);
+      } catch {
+        setMicError(true);
+        setCameraError(true);
+        setMediaCheckDone(true);
+        return;
+      }
     }
+
+    if (stream) {
+      userStreamRef.current = stream;
+
+      if (videoOk && checkVideoRef.current) {
+        checkVideoRef.current.srcObject = stream;
+      }
+
+      // Mic level visualiser
+      if (audioOk) {
+        try {
+          const audioCtx = new AudioContext();
+          micAudioCtxRef.current = audioCtx;
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 256;
+          micAnalyserRef.current = analyser;
+          const source = audioCtx.createMediaStreamSource(stream);
+          source.connect(analyser);
+          const buf = new Uint8Array(analyser.frequencyBinCount);
+
+          const tick = () => {
+            analyser.getByteFrequencyData(buf);
+            const avg = buf.reduce((a, b) => a + b, 0) / buf.length;
+            setMicLevel(Math.min(100, Math.round((avg / 128) * 100)));
+            micAnimFrameRef.current = requestAnimationFrame(tick);
+          };
+          tick();
+        } catch {
+          // Visualiser optional
+        }
+      }
+    }
+
+    setMediaCheckDone(true);
+  }, []);
+
+  // ── Start interview (after media check) ───────────────────────────────────
+
+  const startInterview = useCallback(async () => {
+    // Stop mic-level animation — LiveKit will handle audio capture
+    if (micAnimFrameRef.current) {
+      cancelAnimationFrame(micAnimFrameRef.current);
+      micAnimFrameRef.current = null;
+    }
+    micAudioCtxRef.current?.close();
+    micAudioCtxRef.current = null;
+
+    // Stop existing audio tracks so LiveKit can re-acquire the mic
+    if (userStreamRef.current) {
+      userStreamRef.current.getAudioTracks().forEach(t => t.stop());
+    }
+
+    await connectToRoom();
   }, [connectToRoom]);
 
-  // ── Cleanup on unmount ─────────────────────────────────────────────────────
+  // ── Cleanup on unmount ────────────────────────────────────────────────────
 
   useEffect(() => {
     return () => {
       stopTimer();
+      stopCamera();
       roomRef.current?.disconnect();
     };
-  }, [stopTimer]);
+  }, [stopTimer, stopCamera]);
 
-  // ── Format timer ───────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -258,57 +383,23 @@ export default function VoiceAvatar({
     return `${m}:${s}`;
   };
 
-  // ── UI Render ──────────────────────────────────────────────────────────────
-  // NOTE: UI below is preserved exactly from the original — only infrastructure changed above.
+  const timerUrgent = elapsedSeconds >= wrapUpAt;
 
-  // Permission screen
-  if (phase === 'permission') {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-6">
-        <div className="max-w-md w-full text-center">
-          <div className="w-20 h-20 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
-            <Mic className="w-10 h-10 text-emerald-400" />
-          </div>
-          <h1 className="text-2xl font-bold text-foreground mb-3">
-            Ready to begin your interview?
-          </h1>
-          <p className="text-muted-foreground mb-2">
-            You&apos;ll be speaking with <strong>{interviewerName}</strong>, your AI interviewer for{' '}
-            <strong>{jobTitle}</strong>.
-          </p>
-          <p className="text-muted-foreground mb-8 text-sm">
-            Microphone access is required. Your interview will be recorded.
-          </p>
-          {micError && (
-            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
-              {micError}
-            </div>
-          )}
-          <button
-            onClick={requestPermission}
-            className="w-full py-3 px-6 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors"
-          >
-            Start Interview
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const micFeedback =
+    micLevel === 0   ? 'No signal'   :
+    micLevel < 10    ? 'Very low'    :
+    micLevel < 30    ? 'Good'        :
+    micLevel < 60    ? 'Great'       : 'Too loud';
+  const micFeedbackColor =
+    micLevel === 0   ? 'text-muted-foreground' :
+    micLevel < 10    ? 'text-red-400'           :
+    micLevel < 30    ? 'text-emerald-400'       :
+    micLevel < 60    ? 'text-emerald-400'       : 'text-yellow-400';
 
-  // Connecting screen
-  if (phase === 'connecting') {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-12 h-12 text-emerald-500 animate-spin mx-auto mb-4" />
-          <p className="text-foreground text-lg">Connecting to your interview...</p>
-          <p className="text-muted-foreground text-sm mt-2">Setting up secure voice connection</p>
-        </div>
-      </div>
-    );
-  }
+  const firstName = candidateName?.split(' ')[0] || candidateName;
 
-  // Error screen
+  // ── Render: error ─────────────────────────────────────────────────────────
+
   if (error) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -319,7 +410,7 @@ export default function VoiceAvatar({
           <h1 className="text-2xl font-bold text-foreground mb-3">Connection Error</h1>
           <p className="text-muted-foreground mb-6">{error}</p>
           <button
-            onClick={() => { setError(null); setPhase('permission'); endingRef.current = false; }}
+            onClick={() => { setError(null); setPhase('idle'); endingRef.current = false; }}
             className="px-6 py-3 bg-card hover:bg-muted text-foreground rounded-lg transition-colors border border-border"
           >
             Try Again
@@ -329,129 +420,292 @@ export default function VoiceAvatar({
     );
   }
 
-  // Ending/submitting screen
-  if (phase === 'ending') {
+  // ── Render: connecting ────────────────────────────────────────────────────
+
+  if (phase === 'connecting') {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="w-12 h-12 text-emerald-500 animate-spin mx-auto mb-4" />
-          <p className="text-foreground text-lg">Submitting your interview...</p>
+          <Loader2 className="w-16 h-16 text-cyan-500 animate-spin mx-auto mb-6" />
+          <p className="text-foreground text-xl">Connecting...</p>
+          <p className="text-muted-foreground text-sm mt-2">Preparing your interview</p>
         </div>
       </div>
     );
   }
 
-  // Completed screen
+  // ── Render: ending ────────────────────────────────────────────────────────
+
+  if (phase === 'ending') {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center max-w-md">
+          <Loader2 className="w-16 h-16 text-cyan-500 animate-spin mx-auto mb-6" />
+          <h2 className="text-2xl font-bold text-foreground mb-3">Submitting Your Interview</h2>
+          <p className="text-muted-foreground">
+            We&apos;re wrapping things up and submitting your responses. This should only take a moment...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Render: completed ─────────────────────────────────────────────────────
+
   if (phase === 'completed') {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="rounded-2xl p-10 max-w-md mx-auto text-center border border-border bg-card shadow-xl">
+        <div className="bg-card rounded-2xl p-10 max-w-md mx-auto text-center border border-border shadow-xl">
           <div className="w-20 h-20 bg-gradient-to-br from-emerald-400 to-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
-            <Volume2 className="w-12 h-12 text-white" />
+            <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+            </svg>
           </div>
-          <h1 className="text-2xl font-bold text-foreground mb-3">
-            Interview Complete
-          </h1>
-          <p className="text-muted-foreground mb-2">
-            Thank you, {candidateName}.
+          <h1 className="text-2xl font-bold text-foreground mb-3">Interview Complete!</h1>
+          <p className="text-muted-foreground mb-2">Thank you for your time, {candidateName}.</p>
+          <p className="text-muted-foreground text-sm">
+            Your responses have been recorded and sent to our team. We&apos;ll be in touch soon!
           </p>
-          <p className="text-muted-foreground/70 text-sm">
-            Your responses have been submitted. We&apos;ll be in touch soon.
-          </p>
+          <div className="mt-6 pt-4 border-t border-border">
+            <p className="text-muted-foreground text-xs">
+              Experienced a technical issue? Contact us at{' '}
+              <a href="mailto:printerpix.recruitment@gmail.com" className="text-cyan-400 hover:text-cyan-300 underline">
+                printerpix.recruitment@gmail.com
+              </a>
+            </p>
+          </div>
         </div>
       </div>
     );
   }
 
-  // Active interview screen
+  // ── Render: idle (start screen) ───────────────────────────────────────────
+
+  if (phase === 'idle') {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <div className="max-w-xl w-full">
+          {/* Logo */}
+          <div className="text-center mb-8">
+            <Image src="/logo.jpg" alt="Printerpix" width={56} height={56} className="rounded-xl mx-auto mb-4" />
+          </div>
+
+          {/* Title */}
+          <h1 className="text-2xl sm:text-3xl font-bold text-foreground text-center mb-8">
+            Welcome, <span className="text-cyan-400">{firstName}</span>, to your interview for the{' '}
+            <span className="text-cyan-400">{jobTitle}</span> role at Printerpix.
+          </h1>
+
+          {/* Instructions */}
+          <div className="bg-card/80 border border-border rounded-2xl p-6 sm:p-8 mb-8">
+            <p className="text-muted-foreground text-sm mb-5">
+              This is a {interviewMinutes}-minute guided interview. We want you to perform at your absolute best, so please keep the following in mind:
+            </p>
+            <ul className="space-y-4 text-sm text-muted-foreground">
+              <li className="flex gap-3">
+                <span className="text-cyan-400 font-bold shrink-0">&#x2022;</span>
+                <span><strong className="text-foreground">Secure a strong connection:</strong> We record this conversation for our team to review. A stable internet connection ensures your answers are captured in high quality.</span>
+              </li>
+              <li className="flex gap-3">
+                <span className="text-cyan-400 font-bold shrink-0">&#x2022;</span>
+                <span><strong className="text-foreground">Speak clearly and project:</strong> Find a quiet space and speak at a strong, conversational volume so every word is recorded perfectly.</span>
+              </li>
+              <li className="flex gap-3">
+                <span className="text-cyan-400 font-bold shrink-0">&#x2022;</span>
+                <span><strong className="text-foreground">Be detailed and authentic:</strong> Don&apos;t hold back. Give genuine, honest examples from your past work. The more detail you share, the better we can evaluate your fit for the next stage.</span>
+              </li>
+              <li className="flex gap-3">
+                <span className="text-cyan-400 font-bold shrink-0">&#x2022;</span>
+                <span><strong className="text-foreground">Finish your answer:</strong> After completing your response, pause for a moment and the interviewer will respond automatically.</span>
+              </li>
+            </ul>
+          </div>
+
+          {/* Camera preview + mic level */}
+          {mediaCheckDone && (
+            <div className="mb-6 space-y-4">
+              <div className="mx-auto w-64 h-48 rounded-xl overflow-hidden border-2 border-border bg-card flex items-center justify-center">
+                {cameraError ? (
+                  <div className="text-center text-muted-foreground px-4">
+                    <CameraOff className="w-10 h-10 mx-auto mb-2 text-muted-foreground" />
+                    <p className="text-sm font-medium">No camera detected</p>
+                    <p className="text-xs text-muted-foreground mt-1">You can still proceed without a camera</p>
+                  </div>
+                ) : (
+                  <video ref={checkVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                )}
+              </div>
+
+              {micError ? (
+                <div className="flex items-center justify-center gap-2 text-red-400">
+                  <AlertCircle className="w-5 h-5" />
+                  <span className="text-sm font-medium">Microphone required — please allow access and try again</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 max-w-xs mx-auto">
+                  <Mic className="w-5 h-5 text-muted-foreground shrink-0" />
+                  <div className="flex-1 h-3 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-500 rounded-full transition-all duration-75" style={{ width: `${micLevel}%` }} />
+                  </div>
+                  <span className={`text-sm font-medium w-20 text-right ${micFeedbackColor}`}>{micFeedback}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Buttons */}
+          <div className="flex flex-col items-center gap-3">
+            {!mediaCheckDone ? (
+              <button
+                onClick={startMediaCheck}
+                className="px-8 py-4 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white text-lg font-semibold rounded-xl transition-all transform hover:scale-105 shadow-lg shadow-cyan-500/25"
+              >
+                Check Camera &amp; Mic
+              </button>
+            ) : (
+              <button
+                onClick={startInterview}
+                disabled={micError}
+                className={`px-8 py-4 text-white text-lg font-semibold rounded-xl transition-all transform shadow-lg ${
+                  micError
+                    ? 'bg-muted cursor-not-allowed opacity-50'
+                    : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 hover:scale-105 shadow-cyan-500/25'
+                }`}
+              >
+                Start Interview
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Render: active interview ──────────────────────────────────────────────
+
+  const lastEntry = conversation[conversation.length - 1];
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-        <div className="flex items-center gap-3">
-          <div className={`w-2.5 h-2.5 rounded-full ${
-            connectionState === ConnectionState.Connected
-              ? 'bg-emerald-500 animate-pulse'
-              : 'bg-yellow-500'
-          }`} />
-          <span className="text-sm text-muted-foreground">
-            {connectionState === ConnectionState.Connected
-              ? `Connected — ${interviewerName} is interviewing you`
-              : 'Reconnecting...'}
-          </span>
+
+      {/* Exit button — fixed top left */}
+      <button
+        onClick={() => setShowExitModal(true)}
+        className="fixed top-4 left-4 z-20 w-9 h-9 rounded-full bg-card/80 backdrop-blur-sm border border-border text-muted-foreground hover:text-foreground hover:bg-card transition-all flex items-center justify-center"
+        title="Exit Interview"
+      >
+        <X className="w-5 h-5" />
+      </button>
+
+      {/* Exit confirmation modal */}
+      {showExitModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-2xl p-8 max-w-sm w-full mx-4 shadow-2xl">
+            <h2 className="text-xl font-bold text-foreground mb-3">Exit Interview?</h2>
+            <p className="text-muted-foreground mb-6">
+              Are you sure you want to exit? Your progress will be submitted as-is.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowExitModal(false)}
+                className="flex-1 px-4 py-3 rounded-lg bg-muted text-foreground font-medium hover:bg-muted/80 transition-all"
+              >
+                Continue Interview
+              </button>
+              <button
+                onClick={() => { setShowExitModal(false); endInterview(); }}
+                className="flex-1 px-4 py-3 rounded-lg bg-red-500 text-white font-medium hover:bg-red-600 transition-all"
+              >
+                Exit
+              </button>
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-muted-foreground">
+      )}
+
+      {/* Timer — fixed top right */}
+      <div className="fixed top-4 right-4 z-20">
+        <div className={`flex items-center gap-2 px-4 py-2 rounded-lg backdrop-blur-sm border ${
+          timerUrgent
+            ? 'bg-red-500/20 border-red-500/40 text-red-400'
+            : 'bg-card/80 border-border text-muted-foreground'
+        }`}>
           <Clock className="w-4 h-4" />
-          <span className="font-mono text-sm">{formatTime(elapsedSeconds)}</span>
+          <span className={`font-mono text-lg font-semibold ${timerUrgent ? 'animate-pulse' : ''}`}>
+            {formatTime(elapsedSeconds)}
+          </span>
         </div>
       </div>
 
-      {/* Main area */}
-      <div className="flex-1 flex gap-6 p-6 overflow-hidden">
-        {/* Conversation panel */}
-        <div className="flex-1 flex flex-col gap-3 overflow-y-auto">
-          {conversation.length === 0 && (
-            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-              {isAgentSpeaking ? `${interviewerName} is speaking...` : 'Waiting for the interview to begin...'}
+      {/* Main interview area */}
+      <div className="flex-1 flex items-center justify-center p-8">
+        <div className="flex flex-col items-center justify-center">
+          {/* Pulsing avatar */}
+          <div className={`relative w-48 h-48 mb-8 ${isAgentSpeaking ? 'animate-pulse' : ''}`}>
+            {isAgentSpeaking && (
+              <>
+                <div className="absolute inset-0 bg-cyan-500/20 rounded-full animate-ping" style={{ animationDuration: '1.5s' }} />
+                <div className="absolute inset-2 bg-cyan-500/30 rounded-full animate-ping" style={{ animationDuration: '1.2s' }} />
+              </>
+            )}
+            <div className={`absolute inset-4 rounded-full flex items-center justify-center transition-all duration-300 ${
+              isAgentSpeaking
+                ? 'bg-gradient-to-br from-cyan-400 to-blue-600 shadow-lg shadow-cyan-500/50'
+                : 'bg-gradient-to-br from-muted to-muted/80'
+            }`}>
+              <Volume2 className={`w-16 h-16 transition-colors ${isAgentSpeaking ? 'text-white' : 'text-muted-foreground'}`} />
             </div>
+          </div>
+
+          {/* Interviewer name */}
+          <h2 className="text-2xl font-bold text-foreground mb-2">{interviewerName}</h2>
+          <p className="text-muted-foreground text-sm">
+            {connectionState === ConnectionState.Connected ? interviewerTitle : 'Connecting...'}
+          </p>
+        </div>
+      </div>
+
+      {/* User camera PiP — bottom right */}
+      {isCameraOn && (
+        <div className="fixed bottom-[10rem] right-6 w-36 h-28 rounded-lg overflow-hidden border-2 border-border shadow-xl z-10">
+          <video ref={userVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+        </div>
+      )}
+
+      {/* Subtitle area */}
+      <div className="min-h-24 max-h-48 bg-card/80 backdrop-blur-sm border-t border-border flex items-end justify-center px-8 py-4 overflow-y-auto">
+        <div className="max-w-3xl w-full text-center">
+          {lastEntry?.role === 'interviewer' && (
+            <p className="text-foreground text-base font-medium leading-relaxed">{lastEntry.text}</p>
           )}
-          {conversation.map((entry, i) => (
-            <div
-              key={i}
-              className={`flex gap-3 ${entry.role === 'candidate' ? 'flex-row-reverse' : 'flex-row'}`}
-            >
-              <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 bg-muted text-muted-foreground">
-                {entry.speaker[0]}
-              </div>
-              <div
-                className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-sm ${
-                  entry.role === 'candidate'
-                    ? 'bg-emerald-600/20 text-foreground ml-auto'
-                    : 'bg-card text-foreground border border-border'
-                }`}
-              >
-                <p className="text-xs text-muted-foreground mb-1">{entry.speaker}</p>
-                <p>{entry.text}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Status sidebar */}
-        <div className="w-56 flex flex-col gap-4 shrink-0">
-          {/* Agent speaking indicator */}
-          <div className={`rounded-xl p-4 border transition-colors ${
-            isAgentSpeaking
-              ? 'border-emerald-500/50 bg-emerald-500/10'
-              : 'border-border bg-card'
-          }`}>
-            <div className="flex items-center gap-2 mb-2">
-              <Volume2 className={`w-4 h-4 ${isAgentSpeaking ? 'text-emerald-400' : 'text-muted-foreground'}`} />
-              <span className="text-sm font-medium">{interviewerName}</span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {isAgentSpeaking ? 'Speaking...' : 'Listening'}
+          {lastEntry?.role === 'candidate' && (
+            <p className="text-cyan-400 text-base italic leading-relaxed">&ldquo;{lastEntry.text}&rdquo;</p>
+          )}
+          {!lastEntry && (
+            <p className="text-muted-foreground text-lg">
+              {connectionState === ConnectionState.Connected
+                ? 'Interview starting — please wait...'
+                : 'Connecting...'}
             </p>
-          </div>
-
-          {/* Mic status */}
-          <div className="rounded-xl p-4 border border-border bg-card">
-            <div className="flex items-center gap-2 mb-2">
-              <Mic className="w-4 h-4 text-emerald-400" />
-              <span className="text-sm font-medium">Your mic</span>
-            </div>
-            <p className="text-xs text-muted-foreground">Active — speak clearly</p>
-          </div>
-
-          {/* End button */}
-          <button
-            onClick={() => endInterview()}
-            className="mt-auto flex items-center gap-2 justify-center px-4 py-2.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors text-sm"
-          >
-            <X className="w-4 h-4" />
-            End Interview
-          </button>
+          )}
         </div>
+      </div>
+
+      {/* Control bar */}
+      <div className="h-24 bg-card border-t border-border flex items-center justify-center gap-6">
+        {/* Done Speaking — signals end of user turn; agent will respond */}
+        {!isAgentSpeaking && agentHasSpokenRef.current && (
+          <button
+            onClick={async () => {
+              if (roomRef.current) {
+                await roomRef.current.localParticipant.setMicrophoneEnabled(false);
+              }
+            }}
+            className="px-6 h-14 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white font-semibold flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-500/25"
+          >
+            Done Speaking
+          </button>
+        )}
       </div>
     </div>
   );
