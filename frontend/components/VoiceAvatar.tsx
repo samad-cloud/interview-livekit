@@ -175,7 +175,7 @@ export default function VoiceAvatar({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           candidateId,
-          conversation: transcriptToSubmit.map(e => ({
+          transcript: transcriptToSubmit.map(e => ({
             role: e.role,
             speaker: e.speaker,
             text: e.text,

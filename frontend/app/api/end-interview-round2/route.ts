@@ -28,10 +28,12 @@ export async function POST(request: Request) {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Format transcript if it's an array
-    const transcriptText = Array.isArray(transcript)
-      ? transcript.join('\n')
-      : transcript;
+    // Format transcript — supports both legacy string and new array-of-objects format
+    type TranscriptEntry = { role: string; speaker: string; text: string };
+    const isArray = Array.isArray(transcript);
+    const transcriptText = isArray
+      ? (transcript as TranscriptEntry[]).map(e => `(${e.speaker}): ${e.text}`).join('\n')
+      : transcript as string;
 
     // Fetch candidate data for notes generation
     const { data: candidate, error: candidateError } = await supabase
@@ -60,7 +62,9 @@ export async function POST(request: Request) {
     }
 
     // Guard: check for missing or suspicious candidate responses
-    const hasCandidateResponses = transcriptText.includes('(Candidate):');
+    const hasCandidateResponses = isArray
+      ? (transcript as TranscriptEntry[]).some(e => e.role === 'candidate')
+      : transcriptText.includes('(Candidate):');
     if (!hasCandidateResponses) {
       // Save transcript but don't advance — candidate can retake
       await supabase
@@ -77,16 +81,10 @@ export async function POST(request: Request) {
     }
 
     // Guard: check if candidate responses are too short (suspicious)
-    const candidateResponses = transcriptText.split('(Candidate):').slice(1);
-    const candidateWords = candidateResponses
-      .map((r: string) => {
-        const endIdx = r.search(/\(Serena\):|\(Nova\):|\(Wayne\):|\(Atlas\):|\(Interviewer\):/);
-        return endIdx > -1 ? r.substring(0, endIdx) : r;
-      })
-      .join(' ')
-      .trim()
-      .split(/\s+/)
-      .filter((w: string) => w.length > 0);
+    const candidateWordText = isArray
+      ? (transcript as TranscriptEntry[]).filter(e => e.role === 'candidate').map(e => e.text).join(' ')
+      : transcriptText.split('(Candidate):').slice(1).join(' ');
+    const candidateWords = candidateWordText.trim().split(/\s+/).filter((w: string) => w.length > 0);
 
     if (candidateWords.length < 15) {
       // Save transcript but don't trigger notes or advance status

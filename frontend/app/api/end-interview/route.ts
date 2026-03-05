@@ -158,13 +158,17 @@ export async function POST(request: Request) {
       ? candidate.resume_text.substring(0, 500)
       : 'No resume provided';
 
-    // Format transcript if it's an array
-    const transcriptText = Array.isArray(transcript)
-      ? transcript.join('\n')
-      : transcript;
+    // Format transcript — supports both legacy string and new array-of-objects format
+    type TranscriptEntry = { role: string; speaker: string; text: string };
+    const isArray = Array.isArray(transcript);
+    const transcriptText = isArray
+      ? (transcript as TranscriptEntry[]).map(e => `(${e.speaker}): ${e.text}`).join('\n')
+      : transcript as string;
 
     // Guard: reject scoring if no candidate responses in transcript
-    const hasCandidateResponses = transcriptText.includes('(Candidate):');
+    const hasCandidateResponses = isArray
+      ? (transcript as TranscriptEntry[]).some(e => e.role === 'candidate')
+      : transcriptText.includes('(Candidate):');
     if (!hasCandidateResponses) {
       // Save transcript but don't advance status — candidate can retake
       await supabase
@@ -190,17 +194,10 @@ export async function POST(request: Request) {
     }
 
     // Guard: reject scoring if candidate responses are too short (suspicious/empty interview)
-    const candidateResponses = transcriptText.split('(Candidate):').slice(1);
-    const candidateWords = candidateResponses
-      .map((r: string) => {
-        // Extract text up to the next speaker marker or end
-        const endIdx = r.search(/\(Serena\):|\(Nova\):|\(Wayne\):|\(Atlas\):|\(Interviewer\):/);
-        return endIdx > -1 ? r.substring(0, endIdx) : r;
-      })
-      .join(' ')
-      .trim()
-      .split(/\s+/)
-      .filter((w: string) => w.length > 0);
+    const candidateWordText = isArray
+      ? (transcript as TranscriptEntry[]).filter(e => e.role === 'candidate').map(e => e.text).join(' ')
+      : transcriptText.split('(Candidate):').slice(1).join(' ');
+    const candidateWords = candidateWordText.trim().split(/\s+/).filter((w: string) => w.length > 0);
 
     if (candidateWords.length < 15) {
       console.log(`[End Interview] Suspicious transcript for ${candidate.full_name} (${candidateId}): only ${candidateWords.length} candidate words`);

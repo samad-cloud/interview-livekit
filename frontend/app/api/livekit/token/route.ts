@@ -107,6 +107,7 @@ export async function POST(req: NextRequest) {
             bucket: 'interview-recordings',
             endpoint: `https://${supabaseProjectRef}.supabase.co/storage/v1/s3`,
             region: 'us-east-1',
+            forcePathStyle: true,
           }),
         },
       });
