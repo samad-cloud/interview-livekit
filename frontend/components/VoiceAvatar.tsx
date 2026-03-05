@@ -78,6 +78,7 @@ export default function VoiceAvatar({
   // ── Refs ──────────────────────────────────────────────────────────────────
   const roomRef = useRef<Room | null>(null);
   const egressIdRef = useRef<string | null>(null);
+  const connectingRef = useRef(false);
   const roomNameRef = useRef<string | null>(null);
   const interviewStartRef = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -209,6 +210,9 @@ export default function VoiceAvatar({
   // ── Connect to LiveKit room ────────────────────────────────────────────────
 
   const connectToRoom = useCallback(async () => {
+    // Guard against concurrent calls (double-click, React double-effect, etc.)
+    if (connectingRef.current) return;
+    connectingRef.current = true;
     setPhase('connecting');
 
     try {

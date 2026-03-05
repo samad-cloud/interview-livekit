@@ -33,7 +33,8 @@ export async function POST(req: NextRequest) {
   }
 
   const baseRoomName = `interview-${candidateId}-r${round}`;
-  const roomName = `${baseRoomName}-${Date.now()}`;
+  // Include random suffix to prevent collisions if called twice within the same millisecond
+  const roomName = `${baseRoomName}-${Date.now()}-${Math.floor(Math.random() * 9999)}`;
   const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
 
   // Delete ALL existing rooms for this candidate+round (handles both legacy names and
@@ -72,11 +73,16 @@ export async function POST(req: NextRequest) {
   });
   console.log(`[LiveKit] Created fresh room ${roomName}`);
 
-  // Dispatch agent — room is always fresh so no dedup needed, but guard anyway
+  // Dispatch agent — check for existing dispatches first to prevent duplicates
   try {
     const agentDispatch = new AgentDispatchClient(livekitUrl, apiKey, apiSecret);
-    await agentDispatch.createDispatch(roomName, '');
-    console.log(`[LiveKit] Agent dispatched to room ${roomName}`);
+    const existingDispatches = await agentDispatch.listDispatches(roomName).catch(() => []);
+    if (existingDispatches.length === 0) {
+      await agentDispatch.createDispatch(roomName, '');
+      console.log(`[LiveKit] Agent dispatched to room ${roomName}`);
+    } else {
+      console.log(`[LiveKit] Agent already dispatched to room ${roomName} — skipping duplicate`);
+    }
   } catch (err) {
     console.error('[LiveKit] Agent dispatch failed:', err);
   }
