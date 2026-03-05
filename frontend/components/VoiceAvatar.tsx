@@ -299,11 +299,17 @@ export default function VoiceAvatar({
       // Start with mic muted — unmuted automatically after agent finishes first turn
       await room.localParticipant.setMicrophoneEnabled(false);
 
-      // Wire user camera to PiP video element after connecting
-      if (userStreamRef.current && userVideoRef.current) {
-        userVideoRef.current.srcObject = userStreamRef.current;
-        setIsCameraOn(true);
-      }
+      // Publish camera to the LiveKit room so the egress recording captures video.
+      // Attach the published track to the PiP element once it's ready.
+      room.on(RoomEvent.LocalTrackPublished, (publication) => {
+        if (publication.source === Track.Source.Camera && publication.track && userVideoRef.current) {
+          publication.track.attach(userVideoRef.current);
+          setIsCameraOn(true);
+        }
+      });
+      room.localParticipant.setCameraEnabled(true).catch(() => {
+        // Camera unavailable — proceed without video
+      });
 
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Connection failed';
@@ -385,9 +391,10 @@ export default function VoiceAvatar({
     micAudioCtxRef.current?.close();
     micAudioCtxRef.current = null;
 
-    // Stop existing audio tracks so LiveKit can re-acquire the mic
+    // Stop ALL media tracks so LiveKit can re-acquire both mic and camera
     if (userStreamRef.current) {
-      userStreamRef.current.getAudioTracks().forEach(t => t.stop());
+      userStreamRef.current.getTracks().forEach(t => t.stop());
+      userStreamRef.current = null;
     }
 
     await connectToRoom();
