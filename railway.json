@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "cd backend && python agent.py start",
+    "startCommand": "bash -c 'cd backend && python agent.py start'",
     "restartPolicyType": "ON_FAILURE"
   }
 }
