@@ -307,6 +307,22 @@ async def entrypoint(ctx: JobContext):
         session_start=session_start,
     )
 
+    # Reset interview timer when the candidate actually joins the room so the
+    # agent's elapsed-time tracking matches the frontend timer exactly.
+    candidate_already_present = any(
+        "candidate-" in p.identity
+        for p in ctx.room.remote_participants.values()
+    )
+    if candidate_already_present:
+        agent.session_start = time.time()
+        logger.info("Candidate already in room — interview timer reset")
+
+    @ctx.room.on("participant_connected")
+    def on_participant_connected(participant):
+        if "candidate-" in participant.identity:
+            agent.session_start = time.time()
+            logger.info(f"Candidate {participant.identity} joined — interview timer reset")
+
     # Disconnect this agent when the candidate leaves so stale agents don't
     # linger in the room and cause duplicate greetings on reconnect.
     @ctx.room.on("participant_disconnected")
