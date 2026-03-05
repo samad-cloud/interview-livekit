@@ -33,6 +33,16 @@ export async function POST(req: NextRequest) {
   }
 
   const roomName = `interview-${candidateId}-r${round}`;
+  const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
+
+  // Always delete the old room first so every interview starts completely fresh
+  // (no stale agents, no stale egress, no stale dispatches)
+  try {
+    await roomService.deleteRoom(roomName);
+    console.log(`[LiveKit] Deleted old room ${roomName}`);
+  } catch {
+    // Room didn't exist — that's fine
+  }
 
   // Metadata embedded in room — agent reads this to configure itself
   const roomMetadata = JSON.stringify({
@@ -46,29 +56,20 @@ export async function POST(req: NextRequest) {
     systemPrompt: systemPrompt || null,
   });
 
-  // Create the room with metadata
-  const roomService = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
-  try {
-    await roomService.createRoom({
-      name: roomName,
-      emptyTimeout: 300,
-      maxParticipants: 3,
-      metadata: roomMetadata,
-    });
-  } catch {
-    // Room may already exist — that's fine
-  }
+  // Create a fresh room
+  await roomService.createRoom({
+    name: roomName,
+    emptyTimeout: 300,
+    maxParticipants: 3,
+    metadata: roomMetadata,
+  });
+  console.log(`[LiveKit] Created fresh room ${roomName}`);
 
-  // Dispatch the agent — skip if one is already dispatched to prevent duplicate greetings
+  // Dispatch agent — room is always fresh so no dedup needed, but guard anyway
   try {
     const agentDispatch = new AgentDispatchClient(livekitUrl, apiKey, apiSecret);
-    const existing = await agentDispatch.listDispatch(roomName);
-    if (existing.length === 0) {
-      await agentDispatch.createDispatch(roomName, '');
-      console.log(`[LiveKit] Agent dispatched to room ${roomName}`);
-    } else {
-      console.log(`[LiveKit] Agent already dispatched to ${roomName} (${existing.length} existing) — skipping`);
-    }
+    await agentDispatch.createDispatch(roomName, '');
+    console.log(`[LiveKit] Agent dispatched to room ${roomName}`);
   } catch (err) {
     console.error('[LiveKit] Agent dispatch failed:', err);
   }
@@ -89,7 +90,7 @@ export async function POST(req: NextRequest) {
 
   const token = await at.toJwt();
 
-  // Start Egress recording (audio-only for now — voice migration phase)
+  // Start Egress recording
   let egressId: string | null = null;
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseS3Key = process.env.SUPABASE_S3_ACCESS_KEY_ID;
@@ -99,41 +100,32 @@ export async function POST(req: NextRequest) {
   if (supabaseS3Key && supabaseS3Secret && supabaseProjectRef) {
     try {
       const egressClient = new EgressClient(livekitUrl, apiKey, apiSecret);
+      const folder = round === 2 ? 'round2' : 'round1';
+      const filename = `${folder}/${candidateId}-${Date.now()}-livekit`;
 
-      // Skip if egress already running for this room
-      const existingEgress = await egressClient.listEgress({ roomName });
-      const activeEgress = existingEgress.filter(e => e.status <= 1); // EGRESS_STARTING=0, EGRESS_ACTIVE=1
-      if (activeEgress.length > 0) {
-        egressId = activeEgress[0].egressId;
-        console.log(`[LiveKit] Egress already running for ${roomName} (${egressId}) — skipping`);
-      } else {
-        const folder = round === 2 ? 'round2' : 'round1';
-        const filename = `${folder}/${candidateId}-${Date.now()}-livekit`;
+      const fileOutput = new EncodedFileOutput({
+        filepath: `${filename}.mp4`,
+        output: {
+          case: 's3',
+          value: new S3Upload({
+            accessKey: supabaseS3Key,
+            secret: supabaseS3Secret,
+            bucket: 'interview-recordings',
+            endpoint: `https://${supabaseProjectRef}.supabase.co/storage/v1/s3`,
+            region: 'us-east-1',
+            forcePathStyle: true,
+          }),
+        },
+      });
 
-        const fileOutput = new EncodedFileOutput({
-          filepath: `${filename}.mp4`,
-          output: {
-            case: 's3',
-            value: new S3Upload({
-              accessKey: supabaseS3Key,
-              secret: supabaseS3Secret,
-              bucket: 'interview-recordings',
-              endpoint: `https://${supabaseProjectRef}.supabase.co/storage/v1/s3`,
-              region: 'us-east-1',
-              forcePathStyle: true,
-            }),
-          },
-        });
+      const egress = await egressClient.startRoomCompositeEgress(
+        roomName,
+        fileOutput,
+        { layout: 'speaker' },
+      );
 
-        const egress = await egressClient.startRoomCompositeEgress(
-          roomName,
-          fileOutput,
-          { layout: 'speaker' },
-        );
-
-        egressId = egress.egressId;
-        console.log(`[LiveKit] Egress started: ${egressId} for candidate ${candidateId} R${round}`);
-      }
+      egressId = egress.egressId;
+      console.log(`[LiveKit] Egress started: ${egressId} for candidate ${candidateId} R${round}`);
     } catch (err) {
       console.error('[LiveKit] Egress start failed:', err);
     }
