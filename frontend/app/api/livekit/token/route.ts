@@ -99,32 +99,41 @@ export async function POST(req: NextRequest) {
   if (supabaseS3Key && supabaseS3Secret && supabaseProjectRef) {
     try {
       const egressClient = new EgressClient(livekitUrl, apiKey, apiSecret);
-      const folder = round === 2 ? 'round2' : 'round1';
-      const filename = `${folder}/${candidateId}-${Date.now()}-livekit`;
 
-      const fileOutput = new EncodedFileOutput({
-        filepath: `${filename}.mp4`,
-        output: {
-          case: 's3',
-          value: new S3Upload({
-            accessKey: supabaseS3Key,
-            secret: supabaseS3Secret,
-            bucket: 'interview-recordings',
-            endpoint: `https://${supabaseProjectRef}.supabase.co/storage/v1/s3`,
-            region: 'us-east-1',
-            forcePathStyle: true,
-          }),
-        },
-      });
+      // Skip if egress already running for this room
+      const existingEgress = await egressClient.listEgress({ roomName });
+      const activeEgress = existingEgress.filter(e => e.status <= 1); // EGRESS_STARTING=0, EGRESS_ACTIVE=1
+      if (activeEgress.length > 0) {
+        egressId = activeEgress[0].egressId;
+        console.log(`[LiveKit] Egress already running for ${roomName} (${egressId}) — skipping`);
+      } else {
+        const folder = round === 2 ? 'round2' : 'round1';
+        const filename = `${folder}/${candidateId}-${Date.now()}-livekit`;
 
-      const egress = await egressClient.startRoomCompositeEgress(
-        roomName,
-        fileOutput,
-        { layout: 'speaker' },
-      );
+        const fileOutput = new EncodedFileOutput({
+          filepath: `${filename}.mp4`,
+          output: {
+            case: 's3',
+            value: new S3Upload({
+              accessKey: supabaseS3Key,
+              secret: supabaseS3Secret,
+              bucket: 'interview-recordings',
+              endpoint: `https://${supabaseProjectRef}.supabase.co/storage/v1/s3`,
+              region: 'us-east-1',
+              forcePathStyle: true,
+            }),
+          },
+        });
 
-      egressId = egress.egressId;
-      console.log(`[LiveKit] Egress started: ${egressId} for candidate ${candidateId} R${round}`);
+        const egress = await egressClient.startRoomCompositeEgress(
+          roomName,
+          fileOutput,
+          { layout: 'speaker' },
+        );
+
+        egressId = egress.egressId;
+        console.log(`[LiveKit] Egress started: ${egressId} for candidate ${candidateId} R${round}`);
+      }
     } catch (err) {
       console.error('[LiveKit] Egress start failed:', err);
     }
