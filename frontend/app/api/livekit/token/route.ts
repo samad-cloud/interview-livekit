@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
   // Dispatch the agent — skip if one is already dispatched to prevent duplicate greetings
   try {
     const agentDispatch = new AgentDispatchClient(livekitUrl, apiKey, apiSecret);
-    const existing = await agentDispatch.listDispatches(roomName);
+    const existing = await agentDispatch.listDispatch(roomName);
     if (existing.length === 0) {
       await agentDispatch.createDispatch(roomName, '');
       console.log(`[LiveKit] Agent dispatched to room ${roomName}`);
